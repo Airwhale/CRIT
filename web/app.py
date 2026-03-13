@@ -15,7 +15,7 @@ from pathlib import Path
 import anthropic
 import httpx
 from fastapi import FastAPI, Request, Response, HTTPException, Cookie
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
@@ -47,6 +47,64 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return (TEMPLATES_DIR / "index.html").read_text()
+
+
+# ── Auth: Epic OAuth redirect flow ────────────────────────────────────────────
+# This is the fully automated path: browser is redirected to Epic, user logs in,
+# Epic sends them back to our callback with ?code=XXX, we exchange silently.
+# Epic's launcherAppClient2 was designed for desktop launchers that use localhost
+# callbacks, so localhost redirect URIs are accepted.
+
+@app.get("/auth/epic/start")
+async def epic_auth_start(request: Request, session_id: str | None = Cookie(default=None)):
+    """Redirect the browser to Epic's OAuth authorization page."""
+    sid, _ = _get_session(session_id)
+    base = str(request.base_url).rstrip("/")
+    callback_uri = f"{base}/auth/epic/callback"
+    auth_url = (
+        "https://www.epicgames.com/id/authorize"
+        f"?client_id=34a02cf8f4414e29b15921876da36f9a"
+        f"&response_type=code"
+        f"&redirect_uri={callback_uri}"
+        f"&scope=basic_profile"
+    )
+    response = RedirectResponse(auth_url)
+    _set_session_cookie(response, sid)
+    return response
+
+
+@app.get("/auth/epic/callback")
+async def epic_auth_callback(
+    request: Request,
+    code: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    session_id: str | None = Cookie(default=None),
+):
+    """Receive the authorization code from Epic, exchange it, and redirect home."""
+    if error or not code:
+        reason = error_description or error or "login_cancelled"
+        return RedirectResponse(f"/?auth_error={reason}")
+
+    from game_recommender.epic import exchange_code
+    try:
+        tokens = await asyncio.to_thread(exchange_code, code)
+    except Exception as e:
+        return RedirectResponse(f"/?auth_error={str(e)[:80]}")
+
+    if "access_token" not in tokens:
+        msg = tokens.get("errorMessage", "token_exchange_failed")
+        return RedirectResponse(f"/?auth_error={msg[:80]}")
+
+    sid, session = _get_session(session_id)
+    session["epic"] = {
+        "access_token":  tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token"),
+        "account_id":    tokens.get("account_id"),
+    }
+    response = RedirectResponse("/?auth_success=epic")
+    _set_session_cookie(response, sid)
+    return response
 
 
 # ── Auth: status ───────────────────────────────────────────────────────────────
