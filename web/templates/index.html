@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Game Recommender</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  /* ── Variables ── */
+  :root {
+    --bg:        #0d0d1a;
+    --bg2:       #13132a;
+    --bg3:       #1a1a35;
+    --border:    #2a2a50;
+    --accent:    #7c6aff;
+    --accent2:   #a78bfa;
+    --green:     #34d399;
+    --yellow:    #fbbf24;
+    --red:       #f87171;
+    --text:      #e2e8f0;
+    --muted:     #94a3b8;
+    --steam:     #1b9edb;
+    --epic:      #2d2d2d;
+    --gog:       #a855f7;
+    --radius:    10px;
+  }
+
+  /* ── Reset & Base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 16px; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+  a { color: var(--accent2); }
+  input, textarea, select {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.9rem;
+    padding: 0.5rem 0.75rem;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  button {
+    cursor: pointer;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.55rem 1.1rem;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+  button:hover:not(:disabled) { opacity: 0.88; }
+  button:active:not(:disabled) { transform: scale(0.97); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  label { font-size: 0.82rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  small { font-size: 0.78rem; color: var(--muted); }
+
+  /* ── Layout ── */
+  .page-header {
+    background: linear-gradient(135deg, #1a0a3a 0%, #0d1a3a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .page-header h1 { font-size: 1.3rem; font-weight: 700; }
+  .page-header .tagline { font-size: 0.82rem; color: var(--muted); margin-top: 1px; }
+  .page-header .icon { font-size: 1.8rem; }
+
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+  }
+  .card-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+
+  /* ── Platform cards ── */
+  .platforms { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+  @media (max-width: 640px) { .platforms { grid-template-columns: 1fr; } }
+
+  .platform-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.1rem;
+    transition: border-color 0.2s;
+  }
+  .platform-card.connected { border-color: var(--green); }
+  .platform-card .pf-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.85rem;
+  }
+  .platform-card .pf-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .platform-card .pf-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+  .platform-card.connected .pf-dot { background: var(--green); }
+  .platform-card .pf-status {
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .platform-card.connected .pf-status { color: var(--green); }
+
+  .platform-card .pf-body { display: flex; flex-direction: column; gap: 0.5rem; }
+  .platform-card .pf-body .row { display: flex; gap: 0.5rem; }
+  .platform-card .pf-body .row input { flex: 1; }
+
+  .btn-platform {
+    width: 100%;
+    margin-top: 0.6rem;
+    padding: 0.5rem;
+    font-size: 0.82rem;
+  }
+  .btn-steam { background: var(--steam); color: #fff; }
+  .btn-epic  { background: #5c4dff; color: #fff; }
+  .btn-gog   { background: var(--gog); color: #fff; }
+  .btn-disconnect { background: var(--bg); color: var(--muted); border: 1px solid var(--border); margin-top: 0.4rem; }
+
+  /* OAuth code flow modal overlay */
+  .code-instructions {
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 0.9rem;
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
+    display: none;
+  }
+  .code-instructions.visible { display: block; }
+  .code-instructions .step { color: var(--accent2); font-weight: 600; margin-bottom: 4px; }
+  .code-instructions .open-link {
+    display: inline-block;
+    background: var(--bg3);
+    color: var(--accent2);
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    padding: 3px 8px;
+    text-decoration: none;
+    font-size: 0.78rem;
+    margin: 4px 0;
+  }
+
+  /* ── Error/Notice banners ── */
+  .notice {
+    padding: 0.6rem 0.9rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    display: none;
+  }
+  .notice.visible { display: block; }
+  .notice.error   { background: #2d1010; border: 1px solid var(--red); color: var(--red); }
+  .notice.success { background: #0d2d1c; border: 1px solid var(--green); color: var(--green); }
+  .notice.info    { background: #0d1a2d; border: 1px solid var(--accent); color: var(--accent2); }
+
+  /* ── Library ── */
+  .library-toolbar {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+  .library-toolbar input[type=search] { max-width: 200px; }
+  .library-toolbar select { max-width: 130px; }
+  .library-toolbar .count-badge {
+    margin-left: auto;
+    font-size: 0.8rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .game-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .game-table th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .game-table th:hover { color: var(--text); }
+  .game-table th .sort-arrow { margin-left: 4px; opacity: 0.4; }
+  .game-table th.active .sort-arrow { opacity: 1; color: var(--accent2); }
+  .game-table td { padding: 0.45rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .game-table tr:hover td { background: var(--bg3); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .badge-steam { background: rgba(27,158,219,0.2); color: var(--steam); }
+  .badge-epic  { background: rgba(92,77,255,0.2);  color: #9b8eff; }
+  .badge-gog   { background: rgba(168,85,247,0.2); color: var(--gog); }
+
+  .playtime { color: var(--muted); }
+  .playtime.played { color: var(--text); }
+  .rating-cell { color: var(--yellow); font-size: 0.8rem; }
+
+  .table-wrapper { max-height: 380px; overflow-y: auto; }
+  .table-wrapper::-webkit-scrollbar { width: 6px; }
+  .table-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .load-library-btn {
+    background: linear-gradient(135deg, var(--accent), #5b8dee);
+    color: #fff;
+    padding: 0.55rem 1.4rem;
+  }
+
+  /* ── Recommendations ── */
+  .prefs-row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+  .prefs-row textarea { flex: 1; min-width: 200px; resize: vertical; height: 60px; }
+  .prefs-right { display: flex; flex-direction: column; gap: 0.5rem; min-width: 160px; }
+  .count-row { display: flex; align-items: center; gap: 0.5rem; }
+  .count-row input[type=number] { width: 60px; }
+  .rec-btn {
+    background: linear-gradient(135deg, #7c3aed, var(--accent));
+    color: #fff;
+    font-size: 1rem;
+    padding: 0.65rem 1.5rem;
+  }
+
+  /* Streaming output */
+  #rec-output {
+    margin-top: 1.25rem;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    min-height: 60px;
+    display: none;
+  }
+  #rec-output.visible { display: block; }
+  #rec-output .streaming-cursor {
+    display: inline-block;
+    width: 2px; height: 1em;
+    background: var(--accent2);
+    animation: blink 0.8s step-end infinite;
+    vertical-align: text-bottom;
+    margin-left: 1px;
+  }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+  /* Markdown output styling */
+  #rec-output h1,#rec-output h2 { font-size: 1.1rem; margin: 1rem 0 0.4rem; color: var(--accent2); }
+  #rec-output h3 { font-size: 0.95rem; margin: 0.8rem 0 0.3rem; color: var(--text); }
+  #rec-output p  { margin-bottom: 0.6rem; }
+  #rec-output ul { padding-left: 1.2rem; margin-bottom: 0.6rem; }
+  #rec-output li { margin-bottom: 0.25rem; }
+  #rec-output strong { color: var(--accent2); }
+  #rec-output em { color: var(--muted); font-style: italic; }
+  #rec-output hr { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
+
+  /* ── Spinner ── */
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 5px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Section headers ── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+  }
+  .section-header h2 { font-size: 1rem; font-weight: 700; }
+  .step-num {
+    width: 24px; height: 24px;
+    background: var(--accent);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem; font-weight: 800;
+    flex-shrink: 0;
+  }
+
+  /* hidden helper */
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<header class="page-header">
+  <span class="icon">🎮</span>
+  <div>
+    <h1>Game Recommender</h1>
+    <div class="tagline">AI-powered picks from your own library</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Step 1: Connect Platforms ── -->
+  <div class="card">
+    <div class="section-header">
+      <span class="step-num">1</span>
+      <h2>Connect Your Platforms</h2>
+    </div>
+
+    <div class="platforms">
+
+      <!-- Steam -->
+      <div class="platform-card" id="steam-card">
+        <div class="pf-header">
+          <div class="pf-name">
+            <span class="pf-dot"></span>
+            🟦 Steam
+          </div>
+          <span class="pf-status" id="steam-status">Not connected</span>
+        </div>
+        <div class="pf-body" id="steam-form">
+          <div>
+            <label>Steam API Key
+              <a href="https://steamcommunity.com/dev/apikey" target="_blank" style="font-size:0.72rem;margin-left:4px;">(get one)</a>
+            </label>
+            <input type="password" id="steam-api-key" placeholder="32-char hex key">
+          </div>
+          <div>
+            <label>Steam ID (64-bit)
+              <a href="https://steamid.io" target="_blank" style="font-size:0.72rem;margin-left:4px;">(find yours)</a>
+            </label>
+            <input type="text" id="steam-user-id" placeholder="7656119...">
+          </div>
+          <div class="notice error" id="steam-error"></div>
+          <button class="btn-platform btn-steam" id="steam-connect-btn" onclick="connectSteam()">
+            Connect Steam
+          </button>
+        </div>
+        <div id="steam-connected" hidden>
+          <div class="notice success visible">✓ Steam connected</div>
+          <button class="btn-platform btn-disconnect" onclick="disconnect('steam')">Disconnect</button>
+        </div>
+      </div>
+
+      <!-- Epic -->
+      <div class="platform-card" id="epic-card">
+        <div class="pf-header">
+          <div class="pf-name">
+            <span class="pf-dot"></span>
+            ⬛ Epic
+          </div>
+          <span class="pf-status" id="epic-status">Not connected</span>
+        </div>
+        <div class="pf-body" id="epic-form">
+          <div class="notice info visible" style="font-size:0.78rem;">
+            Epic has no official API. We use the same auth flow as the open-source Legendary launcher.
+          </div>
+          <button class="btn-platform btn-epic" onclick="startEpicAuth()">
+            Open Epic Login →
+          </button>
+          <div class="code-instructions" id="epic-instructions">
+            <div class="step">Step 1</div>
+            <p>Log in to Epic in the tab that opened.</p>
+            <div class="step">Step 2</div>
+            <p>The page shows JSON. Find <code style="color:var(--accent2)">"authorizationCode"</code> and copy its value.</p>
+            <div class="step">Step 3</div>
+            <label>Paste the code here:</label>
+            <div class="row" style="gap:0.5rem;margin-top:4px;">
+              <input type="text" id="epic-code" placeholder="Paste authorizationCode...">
+              <button style="background:var(--accent);color:#fff;white-space:nowrap;" onclick="submitEpicCode()">Submit</button>
+            </div>
+          </div>
+          <div class="notice error" id="epic-error" style="margin-top:4px;"></div>
+        </div>
+        <div id="epic-connected" hidden>
+          <div class="notice success visible">✓ Epic connected</div>
+          <button class="btn-platform btn-disconnect" onclick="disconnect('epic')">Disconnect</button>
+        </div>
+      </div>
+
+      <!-- GOG -->
+      <div class="platform-card" id="gog-card">
+        <div class="pf-header">
+          <div class="pf-name">
+            <span class="pf-dot"></span>
+            🟣 GOG
+          </div>
+          <span class="pf-status" id="gog-status">Not connected</span>
+        </div>
+        <div class="pf-body" id="gog-form">
+          <div class="notice info visible" style="font-size:0.78rem;">
+            GOG's OAuth only allows its own redirect URL, so you'll paste the code from the URL bar.
+          </div>
+          <button class="btn-platform btn-gog" onclick="startGogAuth()">
+            Open GOG Login →
+          </button>
+          <div class="code-instructions" id="gog-instructions">
+            <div class="step">Step 1</div>
+            <p>Log in to GOG in the tab that opened.</p>
+            <div class="step">Step 2</div>
+            <p>After login, you land on a GOG page. <strong>Look at the URL bar</strong> — copy the value after <code style="color:var(--accent2)">?code=</code></p>
+            <div class="step">Step 3</div>
+            <label>Paste the code here:</label>
+            <div class="row" style="gap:0.5rem;margin-top:4px;">
+              <input type="text" id="gog-code" placeholder="Paste code from URL...">
+              <button style="background:var(--gog);color:#fff;white-space:nowrap;" onclick="submitGogCode()">Submit</button>
+            </div>
+          </div>
+          <div class="notice error" id="gog-error" style="margin-top:4px;"></div>
+        </div>
+        <div id="gog-connected" hidden>
+          <div class="notice success visible">✓ GOG connected</div>
+          <button class="btn-platform btn-disconnect" onclick="disconnect('gog')">Disconnect</button>
+        </div>
+      </div>
+
+    </div><!-- .platforms -->
+  </div><!-- step 1 card -->
+
+
+  <!-- ── Step 2: Library ── -->
+  <div class="card" id="library-section" hidden>
+    <div class="section-header">
+      <span class="step-num">2</span>
+      <h2>Your Library</h2>
+    </div>
+
+    <div id="library-load-area">
+      <p style="font-size:0.88rem;color:var(--muted);margin-bottom:0.9rem;">
+        Click to load your games. Ratings from RAWG will be fetched for the top 75 titles.
+      </p>
+      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;">
+        <input type="checkbox" id="skip-ratings"> Skip RAWG ratings (faster)
+      </label>
+      <button class="load-library-btn" onclick="loadLibrary()">
+        Load Library
+      </button>
+    </div>
+
+    <div id="library-content" hidden>
+      <div class="library-toolbar">
+        <input type="search" id="lib-search" placeholder="Search games…" oninput="filterLibrary()">
+        <select id="lib-platform-filter" onchange="filterLibrary()">
+          <option value="">All platforms</option>
+          <option value="steam">Steam</option>
+          <option value="epic">Epic</option>
+          <option value="gog">GOG</option>
+        </select>
+        <select id="lib-sort" onchange="sortLibrary()">
+          <option value="playtime">Sort: Playtime</option>
+          <option value="name">Sort: Name</option>
+          <option value="rating">Sort: RAWG Rating</option>
+          <option value="metacritic">Sort: Metacritic</option>
+        </select>
+        <span class="count-badge" id="lib-count"></span>
+        <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="loadLibrary()">
+          ↻ Refresh
+        </button>
+      </div>
+
+      <div id="library-errors"></div>
+
+      <div class="table-wrapper">
+        <table class="game-table">
+          <thead>
+            <tr>
+              <th style="width:42%">Game</th>
+              <th style="width:10%">Platform</th>
+              <th style="width:13%">Playtime</th>
+              <th style="width:10%">RAWG</th>
+              <th style="width:12%">Metacritic</th>
+              <th style="width:13%">Genres</th>
+            </tr>
+          </thead>
+          <tbody id="game-table-body"></tbody>
+        </table>
+      </div>
+
+      <p id="lib-showing" style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem;"></p>
+    </div>
+  </div><!-- step 2 card -->
+
+
+  <!-- ── Step 3: Recommendations ── -->
+  <div class="card" id="rec-section" hidden>
+    <div class="section-header">
+      <span class="step-num">3</span>
+      <h2>Get Recommendations</h2>
+    </div>
+
+    <div class="prefs-row">
+      <div style="flex:1;min-width:200px;">
+        <label>What are you in the mood for? <small>(optional)</small></label>
+        <textarea id="preferences" placeholder="e.g. something relaxing I can finish in a weekend, or a long RPG to sink into…"></textarea>
+      </div>
+      <div class="prefs-right">
+        <div class="count-row">
+          <label style="margin:0;">Picks:</label>
+          <input type="number" id="rec-count" value="5" min="1" max="10">
+        </div>
+        <button class="rec-btn" id="rec-btn" onclick="getRecommendations()">
+          ✨ Recommend
+        </button>
+      </div>
+    </div>
+
+    <div id="rec-output">
+      <div id="rec-content"></div>
+      <span class="streaming-cursor" id="rec-cursor" hidden></span>
+    </div>
+  </div><!-- step 3 card -->
+
+</main>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+let allGames = [];         // full library from API
+let filteredGames = [];    // after search/filter
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+(async function init() {
+  try {
+    const status = await apiFetch('/api/status');
+    if (status.steam) markConnected('steam');
+    if (status.epic)  markConnected('epic');
+    if (status.gog)   markConnected('gog');
+    if (status.steam || status.epic || status.gog) {
+      document.getElementById('library-section').removeAttribute('hidden');
+    }
+  } catch(e) { /* fresh session, nothing connected */ }
+})();
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+async function apiFetch(url, opts = {}) {
+  const resp = await fetch(url, { credentials: 'same-origin', ...opts });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.detail || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.classList.add('visible');
+}
+function clearError(id) {
+  const el = document.getElementById(id);
+  el.textContent = '';
+  el.classList.remove('visible');
+}
+
+function markConnected(platform) {
+  const card = document.getElementById(`${platform}-card`);
+  const form = document.getElementById(`${platform}-form`);
+  const conn = document.getElementById(`${platform}-connected`);
+  const status = document.getElementById(`${platform}-status`);
+  card.classList.add('connected');
+  status.textContent = 'Connected ✓';
+  form.setAttribute('hidden', '');
+  conn.removeAttribute('hidden');
+  document.getElementById('library-section').removeAttribute('hidden');
+}
+
+function markDisconnected(platform) {
+  const card = document.getElementById(`${platform}-card`);
+  const form = document.getElementById(`${platform}-form`);
+  const conn = document.getElementById(`${platform}-connected`);
+  const status = document.getElementById(`${platform}-status`);
+  card.classList.remove('connected');
+  status.textContent = 'Not connected';
+  form.removeAttribute('hidden');
+  conn.setAttribute('hidden', '');
+}
+
+// ── Steam ──────────────────────────────────────────────────────────────────────
+async function connectSteam() {
+  clearError('steam-error');
+  const apiKey = document.getElementById('steam-api-key').value.trim();
+  const userId = document.getElementById('steam-user-id').value.trim();
+  if (!apiKey || !userId) { showError('steam-error', 'Both fields are required.'); return; }
+
+  const btn = document.getElementById('steam-connect-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Connecting…';
+  try {
+    await apiFetch('/api/auth/steam', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, user_id: userId }),
+    });
+    markConnected('steam');
+  } catch(e) {
+    showError('steam-error', e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect Steam';
+  }
+}
+
+// ── Epic ───────────────────────────────────────────────────────────────────────
+const EPIC_AUTH_URL = 'https://www.epicgames.com/id/api/redirect?clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code';
+
+function startEpicAuth() {
+  window.open(EPIC_AUTH_URL, '_blank');
+  document.getElementById('epic-instructions').classList.add('visible');
+}
+
+async function submitEpicCode() {
+  clearError('epic-error');
+  const code = document.getElementById('epic-code').value.trim();
+  if (!code) { showError('epic-error', 'Paste the authorization code first.'); return; }
+
+  try {
+    await apiFetch('/api/auth/epic', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auth_code: code }),
+    });
+    markConnected('epic');
+    document.getElementById('epic-instructions').classList.remove('visible');
+  } catch(e) {
+    showError('epic-error', 'Auth failed: ' + e.message);
+  }
+}
+
+// ── GOG ────────────────────────────────────────────────────────────────────────
+const GOG_AUTH_URL = 'https://auth.gog.com/auth?client_id=46899977096215655&redirect_uri=https://embed.gog.com/on_login_success?origin=client&response_type=code&layout=client2';
+
+function startGogAuth() {
+  window.open(GOG_AUTH_URL, '_blank', 'width=800,height=600');
+  document.getElementById('gog-instructions').classList.add('visible');
+}
+
+async function submitGogCode() {
+  clearError('gog-error');
+  let code = document.getElementById('gog-code').value.trim();
+  // Handle if user pasted the full URL instead of just the code
+  const match = code.match(/[?&]code=([^&]+)/);
+  if (match) code = match[1];
+  if (!code) { showError('gog-error', 'Paste the code from the URL bar first.'); return; }
+
+  try {
+    await apiFetch('/api/auth/gog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auth_code: code }),
+    });
+    markConnected('gog');
+    document.getElementById('gog-instructions').classList.remove('visible');
+  } catch(e) {
+    showError('gog-error', 'Auth failed: ' + e.message);
+  }
+}
+
+// ── Disconnect ─────────────────────────────────────────────────────────────────
+async function disconnect(platform) {
+  await apiFetch(`/api/auth/${platform}`, { method: 'DELETE' });
+  markDisconnected(platform);
+}
+
+// ── Library ────────────────────────────────────────────────────────────────────
+async function loadLibrary() {
+  const skipRatings = document.getElementById('skip-ratings').checked;
+  const loadArea = document.getElementById('library-load-area');
+  const content = document.getElementById('library-content');
+  const errDiv = document.getElementById('library-errors');
+
+  loadArea.innerHTML = '<span class="spinner"></span> Loading your library…<br><small style="color:var(--muted);margin-top:4px;display:block;">Fetching games and RAWG ratings — this can take 30–60 seconds for large libraries.</small>';
+  content.setAttribute('hidden', '');
+  errDiv.innerHTML = '';
+
+  try {
+    const data = await apiFetch(`/api/library?skip_ratings=${skipRatings}`);
+    allGames = data.games || [];
+    filteredGames = [...allGames];
+
+    if (data.errors && data.errors.length) {
+      data.errors.forEach(e => {
+        errDiv.innerHTML += `<div class="notice error visible" style="margin-bottom:6px;">⚠ ${e.platform}: ${e.error}</div>`;
+      });
+    }
+
+    renderLibraryTable(filteredGames);
+    content.removeAttribute('hidden');
+    document.getElementById('rec-section').removeAttribute('hidden');
+
+    loadArea.innerHTML = `
+      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;">
+        <input type="checkbox" id="skip-ratings" ${skipRatings ? 'checked' : ''}> Skip RAWG ratings (faster)
+      </label>
+      <button class="load-library-btn" onclick="loadLibrary()">Load Library</button>
+    `;
+  } catch(e) {
+    loadArea.innerHTML = `
+      <div class="notice error visible">Failed to load library: ${e.message}</div>
+      <button class="load-library-btn" onclick="loadLibrary()" style="margin-top:0.75rem;">Retry</button>
+    `;
+  }
+}
+
+function renderLibraryTable(games) {
+  const MAX_DISPLAY = 500;
+  const tbody = document.getElementById('game-table-body');
+  const showing = document.getElementById('lib-showing');
+  document.getElementById('lib-count').textContent = `${games.length} games`;
+
+  const rows = games.slice(0, MAX_DISPLAY).map(g => {
+    const hours = g.playtime_minutes > 0
+      ? `<span class="playtime played">${(g.playtime_minutes/60).toFixed(1)}h</span>`
+      : `<span class="playtime">unplayed</span>`;
+    const rawg = g.rawg_rating
+      ? `<span class="rating-cell">★ ${g.rawg_rating.toFixed(1)}</span>`
+      : '<span style="color:var(--border)">—</span>';
+    const mc = g.metacritic
+      ? `<span class="rating-cell" style="color:${g.metacritic >= 80 ? 'var(--green)' : g.metacritic >= 60 ? 'var(--yellow)' : 'var(--red)'}">${g.metacritic}</span>`
+      : '<span style="color:var(--border)">—</span>';
+    const genres = (g.genres || []).slice(0,2).join(', ') || '';
+    return `<tr>
+      <td>${escHtml(g.name)}</td>
+      <td><span class="badge badge-${g.platform}">${g.platform}</span></td>
+      <td>${hours}</td>
+      <td>${rawg}</td>
+      <td>${mc}</td>
+      <td style="color:var(--muted);font-size:0.78rem;">${escHtml(genres)}</td>
+    </tr>`;
+  }).join('');
+
+  tbody.innerHTML = rows;
+  if (games.length > MAX_DISPLAY) {
+    showing.textContent = `Showing ${MAX_DISPLAY} of ${games.length} games`;
+  } else {
+    showing.textContent = '';
+  }
+}
+
+function filterLibrary() {
+  const query = document.getElementById('lib-search').value.toLowerCase();
+  const platform = document.getElementById('lib-platform-filter').value;
+
+  filteredGames = allGames.filter(g => {
+    const matchesSearch = !query || g.name.toLowerCase().includes(query);
+    const matchesPlatform = !platform || g.platform === platform;
+    return matchesSearch && matchesPlatform;
+  });
+
+  sortLibrary();
+}
+
+function sortLibrary() {
+  const sortBy = document.getElementById('lib-sort').value;
+  const sorted = [...filteredGames];
+  if (sortBy === 'playtime') sorted.sort((a,b) => b.playtime_minutes - a.playtime_minutes);
+  else if (sortBy === 'name') sorted.sort((a,b) => a.name.localeCompare(b.name));
+  else if (sortBy === 'rating') sorted.sort((a,b) => (b.rawg_rating||0) - (a.rawg_rating||0));
+  else if (sortBy === 'metacritic') sorted.sort((a,b) => (b.metacritic||0) - (a.metacritic||0));
+  renderLibraryTable(sorted);
+}
+
+// ── Recommendations ────────────────────────────────────────────────────────────
+function getRecommendations() {
+  const prefs = encodeURIComponent(document.getElementById('preferences').value.trim());
+  const count = parseInt(document.getElementById('rec-count').value) || 5;
+
+  const output = document.getElementById('rec-output');
+  const content = document.getElementById('rec-content');
+  const cursor = document.getElementById('rec-cursor');
+  const btn = document.getElementById('rec-btn');
+
+  output.classList.add('visible');
+  content.innerHTML = '';
+  cursor.removeAttribute('hidden');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Asking Claude…';
+
+  let rawText = '';
+  const url = `/api/recommend?preferences=${prefs}&count=${count}`;
+  const es = new EventSource(url);
+
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.done) {
+      es.close();
+      cursor.setAttribute('hidden', '');
+      btn.disabled = false;
+      btn.innerHTML = '✨ Recommend';
+      // Final render with full markdown
+      content.innerHTML = marked.parse(rawText);
+      return;
+    }
+    if (msg.error) {
+      es.close();
+      cursor.setAttribute('hidden', '');
+      btn.disabled = false;
+      btn.innerHTML = '✨ Recommend';
+      content.innerHTML = `<div class="notice error visible">Error: ${escHtml(msg.error)}</div>`;
+      return;
+    }
+    if (msg.text) {
+      rawText += msg.text;
+      // Live render during streaming — use marked for progressive display
+      content.innerHTML = marked.parse(rawText);
+      // Scroll to bottom
+      output.scrollTop = output.scrollHeight;
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    cursor.setAttribute('hidden', '');
+    btn.disabled = false;
+    btn.innerHTML = '✨ Recommend';
+    if (!rawText) {
+      content.innerHTML = '<div class="notice error visible">Connection error. Make sure ANTHROPIC_API_KEY is set in your .env file.</div>';
+    }
+  };
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+</script>
+</body>
+</html>
