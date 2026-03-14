@@ -196,7 +196,8 @@ async def steam_auth_callback(
 
     steam_id = match.group(1)
     sid, session = _get_session(session_id)
-    # Store without api_key — XML fallback will be used for library fetches
+    # Store without api_key — _fetch_steam will use the server STEAM_API_KEY
+    # env var if available, otherwise fall back to the public XML feed.
     session["steam"] = {"user_id": steam_id, "api_key": None}
 
     response = RedirectResponse("/?auth_success=steam")
@@ -584,10 +585,15 @@ async def get_library(
 def _fetch_steam(creds: dict) -> list[dict]:
     """Fetch the Steam library for the credentials stored in session.
 
-    Uses the Web API when an api_key is present; falls back to the public
-    XML feed when only a user_id is stored (e.g. after OpenID login).
+    Priority:
+      1. User-supplied api_key (stored after manual connection or /api/auth/steam/apikey)
+      2. Server-side STEAM_API_KEY env var — lets OpenID-authenticated users get
+         full Web API data (playtime, last_played, F2P games) without supplying
+         their own key
+      3. Public XML feed — no credentials required; less data (no last_played,
+         fewer F2P titles)
     """
-    api_key = creds.get("api_key")
+    api_key = creds.get("api_key") or os.environ.get("STEAM_API_KEY")
     user_id = creds["user_id"]
     if api_key:
         from game_recommender.steam import get_steam_library
