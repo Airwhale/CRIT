@@ -484,9 +484,9 @@
               2. Copy the <code style="color:var(--accent2)">authorizationCode</code> value from the JSON.<br>
               3. Paste it below and click Connect.
             </p>
-            <div class="row" style="gap:0.5rem;margin-top:6px;">
-              <input type="text" id="epic-code" placeholder="Paste authorizationCode…">
-              <button class="btn-platform btn-epic" style="white-space:nowrap;" onclick="submitEpicCode()">Connect</button>
+            <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:6px;">
+              <textarea id="epic-code" placeholder="Paste authorizationCode…" rows="4" style="width:100%;resize:vertical;font-family:monospace;font-size:0.82rem;padding:0.4rem 0.6rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);box-sizing:border-box;"></textarea>
+              <button class="btn-platform btn-epic" style="white-space:nowrap;align-self:flex-start;" onclick="submitEpicCode()">Connect</button>
             </div>
           </div>
           <div class="notice error" id="epic-error" style="margin-top:4px;"></div>

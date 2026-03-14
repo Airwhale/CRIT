@@ -14,6 +14,7 @@ API returns an empty response object rather than a proper error code.
 """
 
 import os
+import re
 import xml.etree.ElementTree as ET
 import requests
 from typing import Optional
@@ -145,7 +146,11 @@ def get_steam_library_xml(user_id: str) -> list[Game]:
     response.raise_for_status()
 
     try:
-        root = ET.fromstring(response.text)
+        # Steam's XML feed sometimes contains unescaped & in game names and
+        # stray control characters — sanitise before parsing.
+        text = re.sub(r'&(?!(?:amp|lt|gt|apos|quot|#\d+|#x[0-9a-fA-F]+);)', '&amp;', response.text)
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+        root = ET.fromstring(text)
     except ET.ParseError as exc:
         raise RuntimeError(f"Steam returned invalid XML: {exc}") from exc
 
