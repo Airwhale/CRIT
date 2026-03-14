@@ -219,3 +219,90 @@ class TestGetEpicLibrary:
         with patch("game_recommender.epic.requests.Session", return_value=session):
             with pytest.raises(req_lib.HTTPError):
                 get_epic_library("bad_tok")
+
+
+# ── Corner cases ──────────────────────────────────────────────────────────────
+
+class TestGetEpicLibraryCornerCases:
+
+    def _resp(self, records, next_cursor=None):
+        r = MagicMock()
+        r.raise_for_status.return_value = None
+        body = {"records": records, "responseMetadata": {}}
+        if next_cursor is not None:
+            body["responseMetadata"]["nextCursor"] = next_cursor
+        r.json.return_value = body
+        return r
+
+    def _session(self, *responses):
+        s = MagicMock()
+        s.get.side_effect = list(responses)
+        return s
+
+    def test_empty_string_cursor_stops_pagination(self):
+        """nextCursor='' is falsy — pagination stops after one page, just like None."""
+        resp = self._resp(
+            [{"appName": "A", "catalogId": "a", "metadata": {"title": "Alpha"}}],
+            next_cursor="",   # empty string, not None
+        )
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            MockSession.return_value = self._session(resp)
+            games = get_epic_library("tok")
+
+        assert len(games) == 1
+        # Only one HTTP call was made
+        MockSession.return_value.get.assert_called_once()
+
+    def test_31_char_alphanumeric_title_not_filtered(self):
+        """31-char alphanumeric strings are one character below the ID heuristic threshold."""
+        title_31 = "a" * 31
+        resp = self._resp([{"appName": "x", "catalogId": "y", "metadata": {"title": title_31}}])
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            MockSession.return_value = self._session(resp)
+            games = get_epic_library("tok")
+
+        assert len(games) == 1
+        assert games[0].name == title_31
+
+    def test_32_char_title_with_non_alphanumeric_char_not_filtered(self):
+        """32 chars but contains a space: isalnum() is False, so not treated as an ID."""
+        title = "a" * 31 + " "   # trailing space: strip() gives 31-char string
+        resp = self._resp([{"appName": "x", "catalogId": "y", "metadata": {"title": title}}])
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            MockSession.return_value = self._session(resp)
+            games = get_epic_library("tok")
+
+        # After stripping the trailing space the title is 31 chars — kept
+        assert len(games) == 1
+        assert games[0].name == "a" * 31
+
+    def test_null_records_raises_type_error(self):
+        """records: null causes extend(None) which raises TypeError — documents crash path."""
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {"records": None, "responseMetadata": {}}
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = MagicMock()
+            s.get.return_value = resp
+            MockSession.return_value = s
+            with pytest.raises(TypeError):
+                get_epic_library("tok")
+
+    def test_records_accumulated_across_pages_before_dedup(self):
+        """
+        Deduplication runs over all pages combined, not per-page.
+        A title appearing on page 1 and page 2 is only returned once.
+        """
+        page1 = self._resp(
+            [{"appName": "A", "catalogId": "a1", "metadata": {"title": "Same Game"}}],
+            next_cursor="cur",
+        )
+        page2 = self._resp(
+            [{"appName": "B", "catalogId": "b1", "metadata": {"title": "Same Game"}}],
+        )
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            MockSession.return_value = self._session(page1, page2)
+            games = get_epic_library("tok")
+
+        assert len(games) == 1
+        assert games[0].name == "Same Game"

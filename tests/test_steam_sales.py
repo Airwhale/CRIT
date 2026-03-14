@@ -374,3 +374,122 @@ class TestGetAllSales:
             )
 
         assert any("deal" in m.lower() or "featured" in m.lower() for m in status_msgs)
+
+
+# ── Corner cases ──────────────────────────────────────────────────────────────
+
+class TestGetFeaturedSpecialsCornerCases:
+
+    def test_discount_exactly_at_threshold_is_included(self):
+        """
+        The filter is `discount < min_discount`, so equality passes through.
+        A 50%-off game at min_discount=50 should be included.
+        """
+        body = _featured_body([
+            {"id": 1, "name": "Right-at-threshold", "discount_percent": 50,
+             "original_price": 2000, "final_price": 1000},
+        ])
+        with patch("game_recommender.steam_sales.requests.get", return_value=_resp(body)):
+            games = get_featured_specials(min_discount=50)
+
+        assert len(games) == 1
+        assert games[0].name == "Right-at-threshold"
+
+    def test_min_discount_zero_includes_zero_percent_items(self):
+        """min_discount=0: condition `discount < 0` is never true, so everything passes."""
+        body = _featured_body([
+            {"id": 1, "name": "Not Discounted", "discount_percent": 0,
+             "original_price": 0, "final_price": 0},
+            {"id": 2, "name": "Big Deal", "discount_percent": 90,
+             "original_price": 5000, "final_price": 500},
+        ])
+        with patch("game_recommender.steam_sales.requests.get", return_value=_resp(body)):
+            games = get_featured_specials(min_discount=0)
+
+        assert len(games) == 2
+
+    def test_original_price_cents_zero_shows_unknown(self):
+        """original_price_cents=0 is falsy — the property returns 'unknown'."""
+        body = _featured_body([
+            {"id": 1, "name": "Freebie", "discount_percent": 100,
+             "original_price": 0, "final_price": 0},
+        ])
+        with patch("game_recommender.steam_sales.requests.get", return_value=_resp(body)):
+            games = get_featured_specials(min_discount=0)
+
+        assert games[0].original_price == "unknown"
+
+    def test_sale_price_cents_zero_shows_free(self):
+        """sale_price_cents=0 is falsy — the property returns 'free'."""
+        body = _featured_body([
+            {"id": 1, "name": "Free Weekend", "discount_percent": 100,
+             "original_price": 5000, "final_price": 0},
+        ])
+        with patch("game_recommender.steam_sales.requests.get", return_value=_resp(body)):
+            games = get_featured_specials(min_discount=50)
+
+        assert games[0].sale_price == "free"
+        assert games[0].original_price == "$50.00"
+
+    def test_app_id_zero_is_kept_not_filtered(self):
+        """str(0) == '0' which is truthy, so id=0 is a valid app_id."""
+        body = _featured_body([
+            {"id": 0, "name": "Zero ID", "discount_percent": 60,
+             "original_price": 2000, "final_price": 800},
+        ])
+        with patch("game_recommender.steam_sales.requests.get", return_value=_resp(body)):
+            games = get_featured_specials(min_discount=50)
+
+        assert len(games) == 1
+        assert games[0].app_id == "0"
+
+
+class TestGetAllSalesCornerCases:
+
+    def test_dedup_keeps_wishlist_version_when_same_app_in_both(self):
+        """
+        Merge order is: wishlist + featured.  The first occurrence wins,
+        so when the same app_id appears in both, the wishlist entry is kept.
+        """
+        wishlist_entry = SaleGame(
+            name="Portal 2", app_id="620", discount_percent=75,
+            original_price_cents=999, sale_price_cents=249, from_wishlist=True,
+        )
+        featured_entry = SaleGame(
+            name="Portal 2", app_id="620", discount_percent=75,
+            original_price_cents=999, sale_price_cents=249, from_wishlist=False,
+        )
+        with patch("game_recommender.steam_sales.get_featured_specials",
+                   return_value=[featured_entry]), \
+             patch("game_recommender.steam_sales.get_wishlist_on_sale",
+                   return_value=[wishlist_entry]):
+            games = get_all_sales(steam_api_key="key", steam_user_id="uid")
+
+        assert len(games) == 1
+        assert games[0].from_wishlist is True   # wishlist version preserved, not featured
+
+    def test_owned_ids_set_none_treated_as_empty(self):
+        """owned_app_ids=None defaults to empty set — no games filtered."""
+        featured = [SaleGame(name="X", app_id="1", discount_percent=50,
+                             original_price_cents=1000, sale_price_cents=500)]
+        with patch("game_recommender.steam_sales.get_featured_specials",
+                   return_value=featured), \
+             patch("game_recommender.steam_sales.get_wishlist_on_sale", return_value=[]):
+            games = get_all_sales(owned_app_ids=None, steam_api_key="k", steam_user_id="u")
+
+        assert len(games) == 1
+
+    def test_all_featured_owned_returns_empty(self):
+        """All featured games are in owned_app_ids — nothing left to return."""
+        featured = [
+            SaleGame(name="A", app_id="1", discount_percent=50,
+                     original_price_cents=1000, sale_price_cents=500),
+            SaleGame(name="B", app_id="2", discount_percent=60,
+                     original_price_cents=2000, sale_price_cents=800),
+        ]
+        with patch("game_recommender.steam_sales.get_featured_specials",
+                   return_value=featured), \
+             patch("game_recommender.steam_sales.get_wishlist_on_sale", return_value=[]):
+            games = get_all_sales(owned_app_ids={"1", "2"}, steam_api_key="k", steam_user_id="u")
+
+        assert games == []

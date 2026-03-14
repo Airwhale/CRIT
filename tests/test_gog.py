@@ -158,3 +158,66 @@ class TestGetGogLibrary:
                    side_effect=req_lib.ConnectionError("timeout")):
             with pytest.raises(req_lib.ConnectionError):
                 get_gog_library("tok")
+
+
+# ── Corner cases ──────────────────────────────────────────────────────────────
+
+class TestGetGogLibraryCornerCases:
+
+    def test_total_pages_zero_still_makes_one_request_and_returns_empty(self):
+        """
+        Loop starts at page=1. If totalPages=0, then 1 >= 0 is True so it breaks
+        immediately — one HTTP request is made, zero games returned.
+        """
+        resp = _products_resp([], total_pages=0)
+        with patch("game_recommender.gog.requests.get", return_value=resp) as mock_get:
+            games = get_gog_library("tok")
+
+        assert games == []
+        assert mock_get.call_count == 1   # one request was still issued
+
+    def test_title_null_coerced_to_empty_string_and_skipped(self):
+        """title: null  →  (None or '').strip() == ''  →  skipped."""
+        resp = _products_resp([
+            {"id": 1, "title": None},
+            {"id": 2, "title": "Real Game"},
+        ])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert len(games) == 1
+        assert games[0].name == "Real Game"
+
+    def test_products_null_raises_type_error(self):
+        """products: null  →  for product in None:  →  TypeError (documents crash path)."""
+        resp = _get_resp({"products": None, "totalPages": 1})
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            with pytest.raises(TypeError):
+                get_gog_library("tok")
+
+    def test_product_id_zero_stored_as_string_zero(self):
+        """id: 0 is a valid app_id — str(0) == '0', not empty, so it is kept."""
+        resp = _products_resp([{"id": 0, "title": "Free Game"}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert len(games) == 1
+        assert games[0].app_id == "0"
+
+    def test_missing_product_id_stored_as_empty_string(self):
+        """When 'id' key is absent, app_id becomes '' (str of the default '')."""
+        resp = _products_resp([{"title": "No ID Game"}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert len(games) == 1
+        assert games[0].app_id == ""
+
+    def test_single_page_library_does_not_make_second_request(self):
+        """totalPages=1: page(1) >= 1 is True immediately — only one request."""
+        resp = _products_resp([{"id": 1, "title": "Solo Game"}], total_pages=1)
+        with patch("game_recommender.gog.requests.get", return_value=resp) as mock_get:
+            games = get_gog_library("tok")
+
+        assert len(games) == 1
+        assert mock_get.call_count == 1

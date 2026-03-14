@@ -439,3 +439,265 @@ class TestRecommend:
         events = parse_sse(resp.text)
         # Should succeed (clamped, not rejected)
         assert any(e.get("done") is True for e in events)
+
+
+# ── Corner cases ──────────────────────────────────────────────────────────────
+
+class TestSteamAuthCornerCases:
+
+    def _steam_mock(self, json_body, status_code=200):
+        mock_resp = MagicMock()
+        mock_resp.status_code = status_code
+        mock_resp.json.return_value = json_body
+        mock_inner = AsyncMock()
+        mock_inner.get = AsyncMock(return_value=mock_resp)
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_inner)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        return mock_cm
+
+    def test_whitespace_only_api_key_returns_400(self, client):
+        """`"   ".strip()` == '' → treated as missing → 400."""
+        resp = client.post("/api/auth/steam", json={"api_key": "   ", "user_id": "123"})
+        assert resp.status_code == 400
+
+    def test_whitespace_only_user_id_returns_400(self, client):
+        resp = client.post("/api/auth/steam", json={"api_key": "key", "user_id": "\t\n"})
+        assert resp.status_code == 400
+
+    def test_steam_returns_empty_response_object_is_rejected(self, client):
+        """Steam returns 200 with `response: {}` (private profile) → 400."""
+        cm = self._steam_mock({"response": {}})
+        with patch("web.app.httpx.AsyncClient", return_value=cm):
+            resp = client.post("/api/auth/steam",
+                               json={"api_key": "key", "user_id": "123"})
+        assert resp.status_code == 400
+        assert "public" in resp.json()["detail"].lower()
+
+    def test_steam_api_error_status_returns_400(self, client):
+        """Non-200 from Steam (e.g. 401) surfaces as a 400 with detail."""
+        cm = self._steam_mock({}, status_code=401)
+        with patch("web.app.httpx.AsyncClient", return_value=cm):
+            resp = client.post("/api/auth/steam",
+                               json={"api_key": "bad_key", "user_id": "123"})
+        assert resp.status_code == 400
+        assert "401" in resp.json()["detail"]
+
+    def test_successful_connect_includes_game_count(self, client):
+        """Response body should include game_count from the Steam library."""
+        cm = self._steam_mock({"response": {"games": [
+            {"appid": 1, "name": "X", "playtime_forever": 0},
+            {"appid": 2, "name": "Y", "playtime_forever": 0},
+        ]}})
+        with patch("web.app.httpx.AsyncClient", return_value=cm):
+            resp = client.post("/api/auth/steam",
+                               json={"api_key": "key", "user_id": "123"})
+        assert resp.status_code == 200
+        assert resp.json()["game_count"] == 2
+
+
+class TestLibraryCornerCases:
+
+    def test_rawg_enrichment_failure_still_returns_games_without_ratings(
+        self, client, monkeypatch
+    ):
+        """If _enrich_with_rawg raises, games come back without ratings and an error is listed."""
+        monkeypatch.setenv("RAWG_API_KEY", "rawg-test-key")
+        session_id = "sess-rawg-fail"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        # Use games without pre-set ratings (simulating what _fetch_steam actually returns)
+        bare_games = [
+            {"name": "Witcher 3", "platform": "steam", "app_id": "1",
+             "playtime_minutes": 100, "rawg_rating": None, "metacritic": None, "genres": []},
+            {"name": "Hades", "platform": "steam", "app_id": "2",
+             "playtime_minutes": 50, "rawg_rating": None, "metacritic": None, "genres": []},
+        ]
+        with patch("web.app._fetch_steam", return_value=bare_games), \
+             patch("web.app._enrich_with_rawg", side_effect=RuntimeError("RAWG down")):
+            resp = client.get("/api/library", cookies={"session_id": session_id})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["games"]) == 2                              # games still returned
+        assert any(e["platform"] == "rawg" for e in data["errors"])
+        assert all(g["rawg_rating"] is None for g in data["games"])  # unenriched
+
+    def test_partial_platform_failure_returns_surviving_platform_games(self, client):
+        """If Steam fails but Epic succeeds, Epic's games appear and Steam is in errors."""
+        session_id = "sess-partial-fail"
+        _sessions[session_id] = {
+            "steam": {"api_key": "k", "user_id": "u"},
+            "epic":  {"access_token": "t"},
+        }
+        epic_games = [
+            {"name": "Fortnite", "platform": "epic", "app_id": "fn",
+             "playtime_minutes": 0, "rawg_rating": None, "metacritic": None, "genres": []},
+        ]
+        with patch("web.app._fetch_steam", side_effect=RuntimeError("profile private")), \
+             patch("web.app._fetch_epic", return_value=epic_games):
+            resp = client.get("/api/library?skip_ratings=true",
+                              cookies={"session_id": session_id})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["games"][0]["name"] == "Fortnite"
+        assert any(e["platform"] == "steam" for e in data["errors"])
+
+    def test_top_75_boundary_76th_game_not_enriched(self, client, monkeypatch):
+        """Only the top 75 games by playtime are passed to RAWG; the 76th is skipped."""
+        monkeypatch.setenv("RAWG_API_KEY", "rawg-key")
+        session_id = "sess-76"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        games_76 = [
+            {"name": f"Game {i:02d}", "platform": "steam", "app_id": str(i),
+             "playtime_minutes": 100 - i,
+             "rawg_rating": None, "metacritic": None, "genres": []}
+            for i in range(76)
+        ]
+        # Enrichment adds a rating to each of the 75 it receives
+        def fake_enrich(games, api_key):
+            return [{**g, "rawg_rating": 4.5} for g in games]
+
+        with patch("web.app._fetch_steam", return_value=games_76), \
+             patch("web.app._enrich_with_rawg", side_effect=fake_enrich) as mock_enrich:
+            resp = client.get("/api/library", cookies={"session_id": session_id})
+
+        called_with = mock_enrich.call_args[0][0]
+        assert len(called_with) == 75                            # exactly 75 sent to RAWG
+
+        data = resp.json()
+        # Game 75 has the lowest playtime (100-75=25 mins) — not enriched
+        last_game = next(g for g in data["games"] if g["name"] == "Game 75")
+        assert last_game["rawg_rating"] is None
+
+    def test_exactly_75_games_all_enriched(self, client, monkeypatch):
+        """With exactly 75 games all_games[:75] == all_games — every one is enriched."""
+        monkeypatch.setenv("RAWG_API_KEY", "rawg-key")
+        session_id = "sess-75-exact"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        games_75 = [
+            {"name": f"Game {i:02d}", "platform": "steam", "app_id": str(i),
+             "playtime_minutes": 75 - i,
+             "rawg_rating": None, "metacritic": None, "genres": []}
+            for i in range(75)
+        ]
+
+        def fake_enrich(games, api_key):
+            return [{**g, "rawg_rating": 4.0} for g in games]
+
+        with patch("web.app._fetch_steam", return_value=games_75), \
+             patch("web.app._enrich_with_rawg", side_effect=fake_enrich) as mock_enrich:
+            resp = client.get("/api/library", cookies={"session_id": session_id})
+
+        called_with = mock_enrich.call_args[0][0]
+        assert len(called_with) == 75
+        assert all(g["rawg_rating"] == 4.0 for g in resp.json()["games"])
+
+
+class TestRecommendCornerCases:
+
+    @pytest.fixture(autouse=True)
+    def set_anthropic_key(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+    def _recommend(self, client, session_id, chunks=None, games=None, mode="library", **params):
+        games = FAKE_GAMES if games is None else games
+        chunks = chunks or ["Here are my picks."]
+        qs = "&".join(f"{k}={v}" for k, v in {"mode": mode, **params}.items())
+        with patch("web.app._fetch_steam", return_value=games), \
+             patch("web.app.anthropic.AsyncAnthropic",
+                   return_value=make_claude_client(chunks)):
+            return client.get(f"/api/recommend?{qs}",
+                              cookies={"session_id": session_id})
+
+    def test_count_zero_clamped_to_one(self, client):
+        """max(1, min(0, 10)) == 1 — count=0 is valid and silently clamped."""
+        session_id = "sess-c0"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+        resp = self._recommend(client, session_id, count=0)
+        events = parse_sse(resp.text)
+        assert any(e.get("done") is True for e in events)
+
+    def test_count_one_minimum_valid(self, client):
+        session_id = "sess-c1"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+        resp = self._recommend(client, session_id, count=1)
+        events = parse_sse(resp.text)
+        assert any(e.get("done") is True for e in events)
+
+    def test_preferences_exactly_500_chars_accepted(self, client):
+        """500 chars is the limit: len > 500 is False at exactly 500."""
+        session_id = "sess-p500"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+        resp = self._recommend(client, session_id, preferences="x" * 500)
+        assert resp.status_code == 200
+        assert any(e.get("done") is True for e in parse_sse(resp.text))
+
+    def test_claude_text_with_quotes_and_newlines_survives_sse_roundtrip(self, client):
+        """
+        json.dumps inside the SSE loop must escape special characters.
+        Parsed events should reproduce the original text faithfully.
+        """
+        session_id = "sess-special"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+        tricky = 'He said "amazing game"!\nBuy it.'
+        resp = self._recommend(client, session_id, chunks=[tricky])
+        text_events = [e for e in parse_sse(resp.text) if "text" in e]
+        full_text = "".join(e["text"] for e in text_events)
+        assert '"amazing game"' in full_text
+        assert "Buy it." in full_text
+
+    def test_unplayed_game_at_exact_max_new_minutes_is_included(self, client):
+        """
+        The filter is `playtime <= max_new_minutes`, so a game with playtime==threshold
+        is counted as unplayed and should appear in the recommendations.
+        """
+        session_id = "sess-exact-threshold"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+        games = [{"name": "Threshold Game", "platform": "steam", "app_id": "1",
+                  "playtime_minutes": 60,
+                  "rawg_rating": None, "metacritic": None, "genres": []}]
+        resp = self._recommend(client, session_id, games=games,
+                               mode="new", max_new_minutes=60)
+        events = parse_sse(resp.text)
+        # Should succeed — if 60-min game was excluded, unplayed list would be empty
+        # and we'd get an error event instead of a done event
+        assert any(e.get("done") is True for e in events), \
+            "A 60-minute game should be unplayed at max_new_minutes=60"
+
+    def test_game_with_61_minutes_is_not_unplayed_at_60_threshold(self, client):
+        """61 > 60: game is played, not unplayed. All-played library → error event."""
+        session_id = "sess-61"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+        games = [{"name": "Barely Played", "platform": "steam", "app_id": "1",
+                  "playtime_minutes": 61,
+                  "rawg_rating": None, "metacritic": None, "genres": []}]
+        resp = self._recommend(client, session_id, games=games,
+                               mode="new", max_new_minutes=60)
+        events = parse_sse(resp.text)
+        assert any("error" in e for e in events)
+
+    def test_library_mode_with_all_unplayed_games_still_recommends(self, client):
+        """Library mode has no playtime requirement — all-unplayed library is valid."""
+        session_id = "sess-unplayed-lib"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+        games = [
+            {"name": f"Unplayed {i}", "platform": "steam", "app_id": str(i),
+             "playtime_minutes": 0, "rawg_rating": None, "metacritic": None, "genres": []}
+            for i in range(5)
+        ]
+        resp = self._recommend(client, session_id, games=games, mode="library")
+        events = parse_sse(resp.text)
+        assert any(e.get("done") is True for e in events)
+
+    def test_session_not_cleared_between_recommend_calls(self, client):
+        """Session state persists across multiple calls in the same test."""
+        session_id = "sess-persist"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        for _ in range(2):
+            resp = self._recommend(client, session_id)
+            assert any(e.get("done") is True for e in parse_sse(resp.text))

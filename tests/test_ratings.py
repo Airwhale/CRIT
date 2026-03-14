@@ -185,3 +185,71 @@ class TestEnrichGames:
 
         assert result[0].rating.rawg_rating == 4.0
         assert result[1].rating.rawg_rating == 3.5
+
+
+# ── Corner cases ──────────────────────────────────────────────────────────────
+
+class TestGetGameRatingCornerCases:
+
+    def test_minimal_result_object_returns_rating_with_none_fields(self):
+        """A result with only a name key yields a valid GameRating; extras are None/empty."""
+        with patch("game_recommender.ratings.requests.get",
+                   return_value=_rawg_resp([{"name": "Sparse Game"}])):
+            rating = get_game_rating("Sparse Game", api_key="key")
+
+        assert rating is not None
+        assert rating.name == "Sparse Game"
+        assert rating.rawg_rating is None
+        assert rating.metacritic_score is None
+        assert rating.genres == []
+        assert rating.tags == []
+
+    def test_result_missing_name_falls_back_to_query_name(self):
+        """If the result has no 'name' key, falls back to the original query string."""
+        with patch("game_recommender.ratings.requests.get",
+                   return_value=_rawg_resp([{"rating": 4.0}])):
+            rating = get_game_rating("My Query", api_key="key")
+
+        assert rating.name == "My Query"
+
+    def test_fewer_than_10_tags_all_returned(self):
+        """[:10] slice on a 5-element list returns all 5 — no truncation."""
+        result = {**WITCHER_RESULT, "tags": [{"name": f"Tag{i}"} for i in range(5)]}
+        with patch("game_recommender.ratings.requests.get", return_value=_rawg_resp([result])):
+            rating = get_game_rating("Game", api_key="key")
+
+        assert len(rating.tags) == 5
+
+    def test_zero_tags_returns_empty_list(self):
+        result = {**WITCHER_RESULT, "tags": []}
+        with patch("game_recommender.ratings.requests.get", return_value=_rawg_resp([result])):
+            rating = get_game_rating("Game", api_key="key")
+
+        assert rating.tags == []
+
+    def test_delay_zero_is_valid(self):
+        """delay=0 passes time.sleep(0) without error."""
+        with patch("game_recommender.ratings.requests.get",
+                   return_value=_rawg_resp([WITCHER_RESULT])), \
+             patch("game_recommender.ratings.time.sleep") as mock_sleep:
+            get_game_rating("The Witcher 3", api_key="key", delay=0)
+
+        mock_sleep.assert_called_once_with(0)
+
+    def test_empty_genres_list_in_result(self):
+        """genres: [] in API result should produce an empty genres list."""
+        result = {**WITCHER_RESULT, "genres": []}
+        with patch("game_recommender.ratings.requests.get", return_value=_rawg_resp([result])):
+            rating = get_game_rating("Game", api_key="key")
+
+        assert rating.genres == []
+
+    def test_different_game_names_cached_independently(self):
+        """Separate cache entries are created for different game names."""
+        with patch("game_recommender.ratings.requests.get",
+                   return_value=_rawg_resp([WITCHER_RESULT])) as mock_get:
+            get_game_rating("Witcher 3", api_key="key")
+            get_game_rating("Hades", api_key="key")
+
+        # Both names required a network call (different cache keys)
+        assert mock_get.call_count == 2

@@ -156,3 +156,67 @@ class TestGetSteamLibraryFailure:
                    side_effect=req_lib.ConnectionError("no route to host")):
             with pytest.raises(req_lib.ConnectionError):
                 get_steam_library(api_key="key", user_id="123")
+
+
+# ── Corner cases ──────────────────────────────────────────────────────────────
+
+class TestGetSteamLibraryCornerCases:
+
+    def test_empty_string_name_is_not_replaced_by_fallback(self):
+        """
+        dict.get("name", default) only uses the default when the key is MISSING.
+        An empty string value passes through — the fallback is not triggered.
+        """
+        payload = {"response": {"games": [
+            {"appid": 9999, "name": "", "playtime_forever": 0},
+        ]}}
+        with patch("game_recommender.steam.requests.get", return_value=_mock_resp(payload)):
+            games = get_steam_library(api_key="key", user_id="123")
+
+        # Documents current behaviour: empty-string name is kept as-is
+        assert games[0].name == ""
+
+    def test_games_with_identical_playtime_all_returned(self):
+        """Stable sort must not lose games when all playtime values are equal."""
+        payload = {"response": {"games": [
+            {"appid": 1, "name": "Alpha", "playtime_forever": 120},
+            {"appid": 2, "name": "Beta",  "playtime_forever": 120},
+            {"appid": 3, "name": "Gamma", "playtime_forever": 120},
+        ]}}
+        with patch("game_recommender.steam.requests.get", return_value=_mock_resp(payload)):
+            games = get_steam_library(api_key="key", user_id="123")
+
+        assert len(games) == 3
+        assert {g.name for g in games} == {"Alpha", "Beta", "Gamma"}
+
+    def test_very_large_playtime_does_not_crash(self):
+        """Steam could return an extremely large playtime_forever value."""
+        payload = {"response": {"games": [
+            {"appid": 1, "name": "No Lifer", "playtime_forever": 999_999_999},
+        ]}}
+        with patch("game_recommender.steam.requests.get", return_value=_mock_resp(payload)):
+            games = get_steam_library(api_key="key", user_id="123")
+
+        assert games[0].playtime_minutes == 999_999_999
+
+    def test_single_game_library_returns_one_item_list(self):
+        """Sorting a one-element list should not raise and should return that element."""
+        payload = {"response": {"games": [
+            {"appid": 730, "name": "Only Game", "playtime_forever": 5},
+        ]}}
+        with patch("game_recommender.steam.requests.get", return_value=_mock_resp(payload)):
+            games = get_steam_library(api_key="key", user_id="123")
+
+        assert len(games) == 1
+        assert games[0].name == "Only Game"
+
+    def test_playtime_is_integer_and_hours_rounds_to_one_decimal(self):
+        """playtime_forever is kept as int; playtime_hours rounds to 1 decimal place."""
+        payload = {"response": {"games": [
+            {"appid": 1, "name": "Game", "playtime_forever": 90},
+        ]}}
+        with patch("game_recommender.steam.requests.get", return_value=_mock_resp(payload)):
+            games = get_steam_library(api_key="key", user_id="123")
+
+        assert isinstance(games[0].playtime_minutes, int)
+        assert games[0].playtime_hours == 1.5  # 90 / 60 = 1.5, unambiguous
