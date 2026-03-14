@@ -1,6 +1,18 @@
 """
 FastAPI web application for the game recommendation system.
 
+Architecture overview:
+  - Sessions are stored in-memory (_sessions dict). This is intentional for a
+    single-user local app: credentials never touch disk, and restarting the
+    server clears all sessions gracefully.
+  - All platform fetches (Steam, Epic, GOG) happen concurrently using
+    asyncio.gather() so the library load time is bounded by the slowest
+    platform, not the sum of all platforms.
+  - Recommendations are streamed to the browser via Server-Sent Events (SSE)
+    so the user sees Claude's output word-by-word rather than waiting for
+    the full response.
+  - Security headers are applied globally via middleware (not per-route).
+
 Run with:
   uvicorn web.app:app --reload --port 8000
   # Then open http://localhost:8000
@@ -19,22 +31,35 @@ from fastapi import FastAPI, Request, Response, HTTPException, Cookie
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from dotenv import load_dotenv
 
+# Load .env before anything else reads environment variables
 load_dotenv()
 
 app = FastAPI(title="Game Recommender")
 
-# Whether to set Secure on cookies — true in production (HTTPS), false for localhost dev.
+# Whether to set the Secure flag on session cookies.
+# In production (HTTPS), set COOKIE_SECURE=true in .env.
+# For localhost development, leave it false (Secure cookies are rejected over HTTP).
 _COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 
 
-# ── Security headers ────────────────────────────────────────────────────────────
+# ── Security headers ──────────────────────────────────────────────────────────
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Apply security headers to every HTTP response.
+
+    Using middleware (rather than per-route decorators) ensures headers are
+    present on all responses including error pages, redirects, and SSE streams.
+    """
     response = await call_next(request)
+    # Prevent MIME-type sniffing (e.g. serving a JS file as HTML)
     response.headers["X-Content-Type-Options"] = "nosniff"
+    # Prevent the app from being embedded in iframes (clickjacking protection)
     response.headers["X-Frame-Options"] = "DENY"
+    # Don't send the full Referer header to third-party sites
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    # Narrow CSP: scripts only from self + the CDN used for marked.js and DOMPurify
+    # Content Security Policy: allow scripts only from self and the CDN that
+    # serves marked.js and DOMPurify. Inline styles are allowed because the
+    # template uses them for dynamic color coding.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' https://cdn.jsdelivr.net; "
@@ -45,36 +70,61 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
-# ── Session store ──────────────────────────────────────────────────────────────
-# Simple in-memory store: session_id -> {platform: credentials}
-# Fine for a single-user local app; restart clears all sessions.
+# ── Session store ─────────────────────────────────────────────────────────────
+# Simple in-memory dict: session_id (UUID string) → {platform: credentials}
+# This is intentional: credentials never persist to disk, and clearing sessions
+# is as simple as restarting the server. Not suitable for multi-user production.
 _sessions: dict[str, dict] = {}
 
+
 def _get_session(session_id: str | None) -> tuple[str, dict]:
-    """Get or create a session, returning (session_id, session_data)."""
+    """Return the existing session or create a new one.
+
+    Args:
+        session_id: The value from the session_id cookie, or None if absent.
+
+    Returns:
+        (session_id, session_data) tuple. If the cookie was valid, returns
+        the existing session; otherwise creates a new UUID and empty session.
+    """
     if session_id and session_id in _sessions:
         return session_id, _sessions[session_id]
+    # Create a fresh session with a new UUID
     new_id = str(uuid.uuid4())
     _sessions[new_id] = {}
     return new_id, _sessions[new_id]
 
 
 def _set_session_cookie(response: Response, session_id: str) -> None:
+    """Attach the session cookie to an outgoing response.
+
+    Settings:
+      httponly=True   — JavaScript cannot read the cookie (XSS mitigation)
+      samesite=strict — Cookie not sent on cross-site requests (CSRF mitigation)
+      secure=?        — Only sent over HTTPS in production (configurable)
+      max_age=8h      — Session expires after 8 hours of inactivity
+    """
     response.set_cookie(
         "session_id",
         session_id,
         httponly=True,
         secure=_COOKIE_SECURE,
         samesite="strict",
-        max_age=60 * 60 * 8,  # 8 hours
+        max_age=60 * 60 * 8,  # 8 hours in seconds
     )
 
 
-# ── HTML page ──────────────────────────────────────────────────────────────────
+# ── HTML page ─────────────────────────────────────────────────────────────────
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    """Serve the single-page frontend.
+
+    The entire UI is a single HTML file — no build step, no bundler,
+    no framework. It embeds CSS and vanilla JS directly.
+    """
     return (TEMPLATES_DIR / "index.html").read_text()
 
 
@@ -82,11 +132,15 @@ async def index():
 # This is the fully automated path: browser is redirected to Epic, user logs in,
 # Epic sends them back to our callback with ?code=XXX, we exchange silently.
 # Epic's launcherAppClient2 was designed for desktop launchers that use localhost
-# callbacks, so localhost redirect URIs are accepted.
+# callbacks, so localhost redirect URIs are accepted without pre-registration.
 
 @app.get("/auth/epic/start")
 async def epic_auth_start(request: Request, session_id: str | None = Cookie(default=None)):
-    """Redirect the browser to Epic's OAuth authorization page."""
+    """Redirect the browser to Epic's OAuth authorization page.
+
+    The callback URL is dynamically constructed from the current request's
+    base_url so this works on both localhost and any deployed hostname.
+    """
     sid, _ = _get_session(session_id)
     base = str(request.base_url).rstrip("/")
     callback_uri = f"{base}/auth/epic/callback"
@@ -97,6 +151,7 @@ async def epic_auth_start(request: Request, session_id: str | None = Cookie(defa
         f"&redirect_uri={callback_uri}"
         f"&scope=basic_profile"
     )
+    # Set the session cookie on the redirect so the callback can find this session
     response = RedirectResponse(auth_url)
     _set_session_cookie(response, sid)
     return response
@@ -110,35 +165,54 @@ async def epic_auth_callback(
     error_description: str | None = None,
     session_id: str | None = Cookie(default=None),
 ):
-    """Receive the authorization code from Epic, exchange it, and redirect home."""
+    """Receive the authorization code from Epic and exchange it for tokens.
+
+    Epic redirects here after the user logs in. If the user cancels or an
+    error occurs, Epic sends ?error= instead of ?code=. Both are handled
+    by redirecting back to the home page with an appropriate query parameter
+    that the frontend reads and displays as a toast message.
+    """
     if error or not code:
+        # User cancelled login or Epic returned an error
         reason = error_description or error or "login_cancelled"
         return RedirectResponse(f"/?auth_error={quote_plus(reason)}")
 
     from game_recommender.epic import exchange_code
     try:
+        # Run the synchronous exchange_code() in a thread pool so we don't
+        # block the async event loop during the HTTP round-trip to Epic.
         tokens = await asyncio.to_thread(exchange_code, code)
     except Exception as e:
+        # Truncate to 120 chars so the error fits in a URL query parameter
         return RedirectResponse(f"/?auth_error={quote_plus(str(e)[:120])}")
 
     if "access_token" not in tokens:
+        # Epic returned 200 but with an error payload (e.g. code already used)
         msg = tokens.get("errorMessage", "token_exchange_failed")
         return RedirectResponse(f"/?auth_error={quote_plus(msg[:120])}")
 
+    # Store credentials in the session — never written to disk
     sid, session = _get_session(session_id)
     session["epic"] = {
         "access_token":  tokens["access_token"],
         "refresh_token": tokens.get("refresh_token"),
         "account_id":    tokens.get("account_id"),
     }
+    # ?auth_success=epic tells the frontend to show a "Connected!" toast
     response = RedirectResponse("/?auth_success=epic")
     _set_session_cookie(response, sid)
     return response
 
 
-# ── Auth: status ───────────────────────────────────────────────────────────────
+# ── Auth: status ──────────────────────────────────────────────────────────────
+
 @app.get("/api/status")
 async def get_status(session_id: str | None = Cookie(default=None)):
+    """Return which platforms are connected in the current session.
+
+    The frontend polls this on page load to restore the connected state after
+    a page refresh (as long as the session cookie and server process are alive).
+    """
     _, session = _get_session(session_id)
     return {
         "steam": "steam" in session,
@@ -147,50 +221,73 @@ async def get_status(session_id: str | None = Cookie(default=None)):
     }
 
 
-# ── Auth: Steam ────────────────────────────────────────────────────────────────
+# ── Auth: Steam ───────────────────────────────────────────────────────────────
+
 @app.post("/api/auth/steam")
 async def connect_steam(
     request: Request,
     session_id: str | None = Cookie(default=None),
 ):
+    """Validate and store Steam credentials.
+
+    Unlike Epic/GOG (which use OAuth), Steam uses a plain API key + user ID pair.
+    We validate the credentials by making a real GetOwnedGames call before storing
+    them, so the user gets an immediate error if the key or ID is wrong.
+
+    Request body (JSON): {"api_key": "...", "user_id": "..."}
+    Response: {"ok": true, "game_count": N}
+    """
     body = await request.json()
+    # Strip whitespace — a key/ID that is only spaces should be treated as empty
     api_key = (body.get("api_key") or "").strip()
     user_id = (body.get("user_id") or "").strip()
 
     if not api_key or not user_id:
         raise HTTPException(400, "api_key and user_id are required")
 
-    # Quick validation: try fetching the library
+    # Validate credentials with a live Steam API call using httpx (async HTTP client)
     url = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/"
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, params={
-            "key": api_key,
-            "steamid": user_id,
-            "include_appinfo": True,
-            "format": "json",
+            "key":              api_key,
+            "steamid":          user_id,
+            "include_appinfo":  True,
+            "format":           "json",
         })
 
     if resp.status_code != 200:
         raise HTTPException(400, f"Steam API error: {resp.status_code}")
 
     data = resp.json()
+    # An empty response dict means the profile is private
     if not data.get("response"):
         raise HTTPException(400, "No response from Steam. Is your profile public?")
 
+    # Credentials are valid — store in session
     sid, session = _get_session(session_id)
     session["steam"] = {"api_key": api_key, "user_id": user_id}
 
+    # Return game_count so the frontend can show "Connected (523 games)"
     response = JSONResponse({"ok": True, "game_count": len(data["response"].get("games", []))})
     _set_session_cookie(response, sid)
     return response
 
 
-# ── Auth: Epic ─────────────────────────────────────────────────────────────────
+# ── Auth: Epic (manual code fallback) ─────────────────────────────────────────
+
 @app.post("/api/auth/epic")
 async def connect_epic(
     request: Request,
     session_id: str | None = Cookie(default=None),
 ):
+    """Store Epic credentials entered via the manual code paste fallback.
+
+    This endpoint is used when the OAuth redirect flow fails (e.g. redirect URI
+    mismatch, pop-up blocker). The user manually visits EPIC_AUTH_URL, copies
+    the authorizationCode from the JSON response, and pastes it here.
+
+    Request body (JSON): {"auth_code": "..."}
+    """
     body = await request.json()
     auth_code = (body.get("auth_code") or "").strip()
 
@@ -218,12 +315,22 @@ async def connect_epic(
     return response
 
 
-# ── Auth: GOG ──────────────────────────────────────────────────────────────────
+# ── Auth: GOG ─────────────────────────────────────────────────────────────────
+
 @app.post("/api/auth/gog")
 async def connect_gog(
     request: Request,
     session_id: str | None = Cookie(default=None),
 ):
+    """Store GOG credentials from the code pasted by the user.
+
+    GOG's redirect URI is fixed to embed.gog.com, so we cannot receive the
+    callback directly. The frontend opens a popup, the user logs in, and then
+    either the postMessage listener auto-captures the code from the popup URL,
+    or the user pastes it manually from the URL bar.
+
+    Request body (JSON): {"auth_code": "..."}
+    """
     body = await request.json()
     auth_code = (body.get("auth_code") or "").strip()
 
@@ -251,28 +358,53 @@ async def connect_gog(
     return response
 
 
-# ── Auth: disconnect ───────────────────────────────────────────────────────────
+# ── Auth: disconnect ──────────────────────────────────────────────────────────
+
 @app.delete("/api/auth/{platform}")
 async def disconnect(platform: str, session_id: str | None = Cookie(default=None)):
+    """Remove a platform's credentials from the session.
+
+    The user can disconnect individual platforms without affecting others.
+    Credentials are simply deleted from the in-memory session dict — nothing
+    else needs to happen since they were never stored persistently.
+    """
     if platform not in ("steam", "epic", "gog"):
         raise HTTPException(404, "Unknown platform")
     _, session = _get_session(session_id)
-    session.pop(platform, None)
+    session.pop(platform, None)  # pop with default avoids KeyError if already missing
     return {"ok": True}
 
 
-# ── Library ────────────────────────────────────────────────────────────────────
+# ── Library ───────────────────────────────────────────────────────────────────
+
 @app.get("/api/library")
 async def get_library(
     skip_ratings: bool = False,
     session_id: str | None = Cookie(default=None),
 ):
+    """Fetch and merge game libraries from all connected platforms.
+
+    Concurrent fetch: all platform fetches run simultaneously via asyncio.gather().
+    A failure in one platform (e.g. expired token, private profile) is recorded
+    in the "errors" list but doesn't prevent the other platforms from returning.
+
+    Post-fetch RAWG enrichment: The top 75 games by playtime are sent to RAWG
+    to get ratings and genre data. The limit keeps load time under ~20 seconds
+    on a typical connection (75 × 0.25s delay + HTTP latency).
+
+    Returns:
+        {"games": [...], "errors": [...]}
+        Each game dict: name, platform, app_id, playtime_minutes, rawg_rating,
+                        metacritic, genres
+    """
     _, session = _get_session(session_id)
 
     if not session:
         raise HTTPException(400, "No platforms connected. Connect at least one platform first.")
 
-    # Gather games from all connected platforms concurrently
+    # Build a dict of {platform_name: coroutine} for the connected platforms.
+    # asyncio.to_thread() wraps the synchronous platform fetchers so they run
+    # in a thread pool without blocking the async event loop.
     tasks = {}
     if "steam" in session:
         tasks["steam"] = asyncio.to_thread(_fetch_steam, session["steam"])
@@ -281,65 +413,84 @@ async def get_library(
     if "gog" in session:
         tasks["gog"] = asyncio.to_thread(_fetch_gog, session["gog"])
 
+    # return_exceptions=True prevents one platform failure from cancelling others.
+    # Failed tasks return Exception objects; successful tasks return lists of dicts.
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
     all_games = []
     errors = []
     for platform, result in zip(tasks.keys(), results):
         if isinstance(result, Exception):
+            # Record the error and continue — partial results are better than none
             errors.append({"platform": platform, "error": str(result)})
         else:
             all_games.extend(result)
 
-    # Sort by playtime desc then name
+    # Primary sort: most-played first. Secondary sort: alphabetical for ties.
     all_games.sort(key=lambda g: (-g["playtime_minutes"], g["name"].lower()))
 
-    # Optionally enrich with RAWG ratings
+    # ── Optional RAWG enrichment ──────────────────────────────────────────────
     rawg_key = os.environ.get("RAWG_API_KEY")
     if not skip_ratings and rawg_key and all_games:
-        # Only enrich top 75 to keep load time reasonable
+        # Cap at 75 to keep the enrichment time reasonable (~20s at 0.25s/game)
         to_enrich = all_games[:75]
         try:
             enriched = await asyncio.to_thread(_enrich_with_rawg, to_enrich, rawg_key)
-            # Merge back: enriched replaces the first N, rest stay as-is
+            # Build a lookup by name, then reconstruct the full list in original order.
+            # Games beyond the top 75 stay as-is (no rating data added).
             ratings_map = {g["name"]: g for g in enriched}
             all_games = [ratings_map.get(g["name"], g) for g in all_games]
         except Exception as e:
+            # RAWG failure is non-fatal — games still display without ratings
             errors.append({"platform": "rawg", "error": str(e)})
 
     return {"games": all_games, "errors": errors}
 
 
+# ── Platform fetch helpers (synchronous, run in thread pool) ──────────────────
+
 def _fetch_steam(creds: dict) -> list[dict]:
+    """Fetch the Steam library for the credentials stored in session.
+
+    Converts Game objects to plain dicts for JSON serialization.
+    """
     from game_recommender.steam import get_steam_library
     games = get_steam_library(creds["api_key"], creds["user_id"])
     return [_game_to_dict(g) for g in games]
 
 
 def _fetch_epic(creds: dict) -> list[dict]:
+    """Fetch the Epic library, automatically retrying with a token refresh on failure.
+
+    Epic access tokens expire after ~2 hours. Rather than forcing re-authentication,
+    we silently try a token refresh on the first exception and retry the fetch.
+    If the refresh also fails, the original exception propagates to the caller.
+    """
     from game_recommender.epic import get_epic_library, refresh_tokens
     try:
         games = get_epic_library(creds["access_token"])
     except Exception:
-        # Try refreshing token
+        # Token may have expired — try refreshing before giving up
         if creds.get("refresh_token"):
             new_tokens = refresh_tokens(creds["refresh_token"])
-            creds["access_token"] = new_tokens["access_token"]
+            # Update the in-memory credentials so subsequent calls use the new token
+            creds["access_token"]  = new_tokens["access_token"]
             creds["refresh_token"] = new_tokens.get("refresh_token", creds["refresh_token"])
             games = get_epic_library(creds["access_token"])
         else:
-            raise
+            raise  # No refresh token available — propagate the original error
     return [_game_to_dict(g) for g in games]
 
 
 def _fetch_gog(creds: dict) -> list[dict]:
+    """Fetch the GOG library with the same token-refresh retry logic as _fetch_epic."""
     from game_recommender.gog import get_gog_library, refresh_tokens
     try:
         games = get_gog_library(creds["access_token"])
     except Exception:
         if creds.get("refresh_token"):
             new_tokens = refresh_tokens(creds["refresh_token"])
-            creds["access_token"] = new_tokens["access_token"]
+            creds["access_token"]  = new_tokens["access_token"]
             creds["refresh_token"] = new_tokens.get("refresh_token", creds["refresh_token"])
             games = get_gog_library(creds["access_token"])
         else:
@@ -348,23 +499,36 @@ def _fetch_gog(creds: dict) -> list[dict]:
 
 
 def _game_to_dict(game) -> dict:
+    """Serialize a Game dataclass to a JSON-compatible dict.
+
+    The rating fields (rawg_rating, metacritic, genres) are initialized to
+    their "empty" values here; _enrich_with_rawg will overwrite them for
+    games that have RAWG data.
+    """
     return {
         "name":             game.name,
         "platform":         game.platform,
         "app_id":           game.app_id,
         "playtime_minutes": game.playtime_minutes,
-        "rawg_rating":      None,
-        "metacritic":       None,
-        "genres":           [],
+        "rawg_rating":      None,   # Populated by _enrich_with_rawg if called
+        "metacritic":       None,   # Populated by _enrich_with_rawg if called
+        "genres":           [],     # Populated by _enrich_with_rawg if called
     }
 
 
 def _enrich_with_rawg(games: list[dict], api_key: str) -> list[dict]:
+    """Add RAWG rating data to a list of game dicts.
+
+    Returns a new list of dicts with rawg_rating, metacritic, and genres
+    fields filled in where RAWG found a match. Unmatched games keep None/[].
+    """
     from game_recommender.ratings import get_game_rating
     enriched = []
     for game in games:
         rating = get_game_rating(game["name"], api_key=api_key)
         if rating:
+            # dict spread creates a new dict rather than mutating the original —
+            # safe even if the original dict is referenced elsewhere
             game = {**game,
                 "rawg_rating": rating.rawg_rating,
                 "metacritic":  rating.metacritic_score,
@@ -374,21 +538,40 @@ def _enrich_with_rawg(games: list[dict], api_key: str) -> list[dict]:
     return enriched
 
 
-# ── Recommendations (SSE) ──────────────────────────────────────────────────────
+# ── Recommendations (SSE) ─────────────────────────────────────────────────────
+
 @app.get("/api/recommend")
 async def recommend(
     mode: str = "library",          # "library" | "sales" | "new"
-    preferences: str = "",
-    count: int = 5,
-    # sales mode options
-    min_discount: int = 40,
-    include_wishlist: bool = True,
-    # new-game mode options
-    max_new_minutes: int = 60,
+    preferences: str = "",          # Freeform user mood/preference text
+    count: int = 5,                 # Number of recommendations to request
+    # Sales mode options
+    min_discount: int = 40,         # Minimum discount percentage to include
+    include_wishlist: bool = True,  # Whether to check the Steam wishlist
+    # Backlog mode options
+    max_new_minutes: int = 60,      # Games with <= this many minutes are "unplayed"
     session_id: str | None = Cookie(default=None),
 ):
+    """Stream game recommendations from Claude via Server-Sent Events.
+
+    SSE format: each event is a JSON-encoded line:
+      data: {"type": "status", "msg": "Loading your library…"}\n\n
+      data: {"text": "Here are my picks..."}\n\n   (one per Claude text chunk)
+      data: {"done": true}\n\n                      (signals stream end)
+      data: {"error": "something went wrong"}\n\n   (stream ends on error)
+
+    Validation failures (bad mode, missing key, preferences too long) return
+    HTTP 400 before the stream opens. Runtime errors (empty library, Claude
+    exception) are sent as error events within the stream.
+
+    Three recommendation modes:
+      library — recommend games the user already owns (default)
+      sales   — find current Steam deals that match the user's taste
+      new     — suggest unplayed games from the user's backlog
+    """
     _, session = _get_session(session_id)
 
+    # Pre-stream validation — these checks return 400 before any SSE headers are sent
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if not anthropic_key:
         raise HTTPException(400, "ANTHROPIC_API_KEY not configured on the server")
@@ -398,28 +581,39 @@ async def recommend(
         raise HTTPException(400, f"Unknown mode: {mode}")
     if len(preferences) > 500:
         raise HTTPException(400, "preferences must be 500 characters or fewer")
+
+    # Clamp count silently rather than erroring — improves UX for edge inputs
     count = max(1, min(count, 10))
 
     async def event_stream():
+        """Async generator that yields SSE-formatted data lines."""
+
         def status(msg: str):
+            """Helper: format a status message as an SSE event."""
             return f'data: {json.dumps({"type": "status", "msg": msg})}\n\n'
 
-        # ── Fetch library (all modes need it for context) ──────────────────
+        # ── Step 1: Fetch library (needed by all three modes) ─────────────────
         yield status("Loading your library…")
         try:
+            # Call the library endpoint internally rather than duplicating its logic.
+            # skip_ratings=True because we don't need RAWG data for the recommendation
+            # prompt — the LLM only needs game names and playtime for context.
             library_resp = await get_library(skip_ratings=True, session_id=session_id)
             games_raw = library_resp["games"]
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
-            return
+            return  # Abort the stream
+
         if not games_raw:
             yield f'data: {json.dumps({"error": "Library is empty"})}\n\n'
             return
 
-        # ── Mode-specific data fetching ────────────────────────────────────
+        # ── Step 2: Mode-specific data gathering ──────────────────────────────
+
         if mode == "sales":
             yield status("Fetching Steam featured deals…")
             steam_creds = session.get("steam", {})
+            # owned_ids lets get_all_sales filter out games the user already owns
             owned_ids = {g["app_id"] for g in games_raw if g.get("app_id")}
 
             if include_wishlist and steam_creds:
@@ -428,6 +622,7 @@ async def recommend(
                 )
 
             try:
+                # Run the synchronous sale fetcher in a thread pool
                 sale_games = await asyncio.to_thread(
                     _fetch_sales,
                     min_discount,
@@ -446,37 +641,52 @@ async def recommend(
             prompt = _build_sales_prompt(games_raw, sale_games, preferences, count)
 
         elif mode == "new":
+            # "New" means games the user hasn't played (or barely played).
+            # max_new_minutes is the threshold: games at or below it are "unplayed".
             unplayed = [g for g in games_raw if g["playtime_minutes"] <= max_new_minutes]
             if not unplayed:
                 yield f'data: {json.dumps({"error": "No unplayed games found in your library."})}\n\n'
                 return
             prompt = _build_new_game_prompt(games_raw, unplayed, preferences, count)
 
-        else:  # library
+        else:  # mode == "library"
             prompt = _build_library_prompt(games_raw, preferences, count)
 
-        # ── Stream Claude ──────────────────────────────────────────────────
+        # ── Step 3: Stream Claude's response ──────────────────────────────────
         yield status("Asking Claude…")
+
+        # Use AsyncAnthropic so the streaming doesn't block the event loop
         client = anthropic.AsyncAnthropic(api_key=anthropic_key)
         try:
             async with client.messages.stream(
                 model="claude-opus-4-6",
                 max_tokens=4096,
-                thinking={"type": "adaptive"},
+                thinking={"type": "adaptive"},  # Claude decides if extended thinking helps
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
+                # Yield each text chunk as it arrives — the browser renders it immediately
                 async for text in stream.text_stream:
+                    # json.dumps handles quoting, escaping newlines, etc.
                     yield f'data: {json.dumps({"text": text})}\n\n'
+
+            # Signal that the stream is complete so the frontend can hide the spinner
             yield 'data: {"done": true}\n\n'
+
         except Exception as e:
+            # Yield the error as an SSE event rather than crashing the stream
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",       # Don't cache SSE responses
+            "X-Accel-Buffering": "no",         # Disable nginx buffering for SSE
+        },
     )
 
+
+# ── Sales helper ──────────────────────────────────────────────────────────────
 
 def _fetch_sales(
     min_discount: int,
@@ -484,6 +694,7 @@ def _fetch_sales(
     include_wishlist: bool,
     owned_ids: set[str],
 ) -> list:
+    """Wrapper around get_all_sales, extracting credentials from the session dict."""
     from game_recommender.steam_sales import get_all_sales
     return get_all_sales(
         min_discount=min_discount,
@@ -494,7 +705,10 @@ def _fetch_sales(
     )
 
 
+# ── Prompt builders ───────────────────────────────────────────────────────────
+
 def _build_library_prompt(games: list[dict], preferences: str, count: int) -> str:
+    """Build a prompt asking Claude to pick games from the user's owned library."""
     return _build_prompt(games, preferences, count)
 
 
@@ -504,9 +718,17 @@ def _build_sales_prompt(
     preferences: str,
     count: int,
 ) -> str:
-    """Prompt asking Claude to pick the best current Steam deals for this player."""
+    """Build a prompt asking Claude to find the best current Steam deals for this player.
 
+    The prompt includes two sections:
+      1. The user's library (as a taste profile — what they've played and liked)
+      2. The current deals (the candidate set Claude must choose from)
+
+    Claude is instructed to pick deals that match the library taste profile,
+    prioritizing wishlist items since those are pre-selected by the user.
+    """
     def _game_line(g: dict) -> str:
+        """Format one library game for the taste profile section."""
         line = f"- {g['name']} ({g['platform'].upper()})"
         if g["playtime_minutes"] > 0:
             line += f" | {round(g['playtime_minutes'] / 60, 1)}h played"
@@ -515,6 +737,8 @@ def _build_sales_prompt(
         return line
 
     def _sale_line(s) -> str:
+        """Format one sale game, flagging wishlist items prominently."""
+        # The star emoji makes wishlist items visually distinct in Claude's response
         tag = "⭐ WISHLIST" if s.from_wishlist else "🛒 FEATURED"
         line = (
             f"{tag}: {s.name} | {s.discount_percent}% OFF → {s.sale_price}"
@@ -524,6 +748,7 @@ def _build_sales_prompt(
             line += f" | {', '.join(s.genres[:3])}"
         return line
 
+    # Cap both sections to keep prompt length manageable
     library_lines = "\n".join(_game_line(g) for g in games[:80])
     sale_lines    = "\n".join(_sale_line(s) for s in sale_games[:50])
     prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
@@ -557,16 +782,25 @@ def _build_new_game_prompt(
     preferences: str,
     count: int,
 ) -> str:
-    """Prompt asking Claude which unplayed library games to try first."""
+    """Build a prompt asking Claude to suggest unplayed games from the user's backlog.
 
+    The prompt includes:
+      1. Games the user has played (taste profile — shows what they enjoy)
+      2. Unplayed games in their library (the candidate set)
+
+    Claude matches unplayed games to the demonstrated taste from the played section.
+    """
     def _played_line(g: dict) -> str:
+        """Format one played game for the taste profile section."""
         line = f"- {g['name']} | {round(g['playtime_minutes'] / 60, 1)}h"
         if g.get("genres"):
             line += f" | {', '.join(g['genres'][:3])}"
         return line
 
     def _unplayed_line(g: dict) -> str:
+        """Format one unplayed game as a candidate recommendation."""
         mins = g["playtime_minutes"]
+        # Show minutes (not hours) for low-playtime games so "5 min" reads naturally
         playtime = f"{mins}min" if mins else "0 min"
         line = f"- {g['name']} ({g['platform'].upper()}) | {playtime}"
         if g.get("rawg_rating"):
@@ -575,6 +809,7 @@ def _build_new_game_prompt(
             line += f" | {', '.join(g['genres'][:3])}"
         return line
 
+    # Only games with >60 minutes played are a meaningful taste signal
     played = [g for g in games if g["playtime_minutes"] > 60]
     played_lines   = "\n".join(_played_line(g) for g in played[:60])
     unplayed_lines = "\n".join(_unplayed_line(g) for g in unplayed[:80])
@@ -604,8 +839,14 @@ Only recommend games from the unplayed list above."""
 
 
 def _build_prompt(games: list[dict], preferences: str, count: int) -> str:
+    """Build the default library recommendation prompt.
+
+    Formats up to 100 games with playtime and any available rating data,
+    then asks Claude for exactly `count` recommendations with a structured
+    format for each (Why now / Ratings / Best for / Similar to).
+    """
     lines = []
-    for g in games[:100]:
+    for g in games[:100]:  # Cap at 100 to keep the prompt within context limits
         line = f"- {g['name']} ({g['platform'].upper()})"
         if g["playtime_minutes"] > 0:
             hours = round(g["playtime_minutes"] / 60, 1)

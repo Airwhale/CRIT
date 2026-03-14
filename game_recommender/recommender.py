@@ -1,8 +1,14 @@
 """
 LLM-powered game recommender using Claude.
 
-Takes the user's library (with playtime) and enriched ratings data,
-then asks Claude to recommend what to play next.
+Takes the user's library (with playtime and optional RAWG ratings data),
+then asks Claude to recommend what to play next. The web app also uses
+claude-opus-4-6 directly via AsyncAnthropic, so this module is primarily
+used by the CLI. Both paths use the same model and prompt structure.
+
+The `thinking={"type": "adaptive"}` parameter lets Claude decide whether
+extended thinking is warranted. For library analysis it adds meaningful
+depth; for simple queries it skips thinking to save tokens and time.
 """
 
 import os
@@ -12,27 +18,50 @@ from .models import GameWithRating
 
 
 def _format_library_for_prompt(games: list[GameWithRating], max_games: int = 100) -> str:
-    """Format the game library into a readable prompt section."""
+    """Serialize a game library into a compact, human-readable text block for the LLM prompt.
+
+    Each game becomes one line with as much context as available:
+      - Name and platform (always present)
+      - Playtime in hours, or "unplayed" (always present)
+      - RAWG rating out of 5 (if enriched and non-null)
+      - Metacritic score out of 100 (if enriched and non-null)
+      - Up to 3 genres (if enriched; capped to avoid prompt bloat)
+
+    The result is embedded directly in the prompt so Claude can reason about
+    the user's play history without additional tool calls.
+
+    Args:
+        games: Library of GameWithRating objects, typically sorted by playtime.
+        max_games: Maximum number of games to include. Caps prompt length to stay
+                   within the model's context window and keep inference fast.
+
+    Returns:
+        Multi-line string, one game per line.
+    """
     lines = []
     for gwr in games[:max_games]:
-        game = gwr.game
+        game   = gwr.game
         rating = gwr.rating
 
+        # Base: "- Game Name (PLATFORM) | Xh played" (or "unplayed")
         line = f"- {game.name} ({game.platform.upper()})"
         if game.playtime_hours > 0:
             line += f" | {game.playtime_hours}h played"
         else:
             line += " | unplayed"
 
+        # Append ratings metadata when available — gives Claude objective quality signals
         if rating:
             if rating.rawg_rating:
                 line += f" | RAWG: {rating.rawg_rating:.1f}/5"
             if rating.metacritic_score:
                 line += f" | Metacritic: {rating.metacritic_score}/100"
             if rating.genres:
+                # Show at most 3 genres to keep lines readable
                 line += f" | Genres: {', '.join(rating.genres[:3])}"
 
         lines.append(line)
+
     return "\n".join(lines)
 
 
@@ -43,19 +72,34 @@ def get_recommendations(
     api_key: Optional[str] = None,
     stream_output: bool = True,
 ) -> str:
-    """
-    Ask Claude to recommend games from the user's library.
+    """Ask Claude to recommend games from the user's library.
+
+    Builds a structured prompt that includes:
+      - The full formatted library (up to 100 games)
+      - Library statistics (total/played/unplayed counts)
+      - Optional freeform user preferences/mood
+      - A detailed format specification for Claude's output
 
     Args:
         games: List of GameWithRating objects (the user's library with ratings).
-        user_preferences: Optional freeform text from the user about their mood/preferences.
-        num_recommendations: How many games to recommend.
+               Should be pre-sorted by playtime so most-played appear first in the prompt.
+        user_preferences: Optional free-text from the user describing their current
+                          mood or desires, e.g. "something short I can finish this week".
+        num_recommendations: How many games Claude should recommend. Passed as a
+                             literal number in the prompt so Claude counts precisely.
         api_key: Anthropic API key. Falls back to ANTHROPIC_API_KEY env var.
-        stream_output: If True, streams the response to stdout as it's generated.
+        stream_output: If True, print each text chunk to stdout as it arrives and
+                       return the joined string. If False, wait for the full response
+                       (used in tests and non-interactive contexts).
 
     Returns:
-        The full recommendation text from Claude.
+        The complete recommendation text from Claude as a single string.
+
+    Raises:
+        ValueError: If no Anthropic API key is available.
+        anthropic.APIError and subclasses: On API failures (rate limits, auth, etc.).
     """
+    # Resolve API key — explicit argument wins over environment variable
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError(
@@ -65,16 +109,24 @@ def get_recommendations(
 
     client = anthropic.Anthropic(api_key=api_key)
 
+    # Format the library into the text block that goes into the prompt
     library_text = _format_library_for_prompt(games)
 
-    # Split into played vs unplayed for better context
-    played = [g for g in games if g.game.playtime_minutes > 0]
+    # Compute library stats for the prompt context
+    played   = [g for g in games if g.game.playtime_minutes > 0]
     unplayed = [g for g in games if g.game.playtime_minutes == 0]
 
+    # Only include the preferences section if the user provided one —
+    # an empty section would be confusing and wastes tokens.
     preferences_section = ""
     if user_preferences:
         preferences_section = f"\n\n**User's current preferences / mood:**\n{user_preferences}"
 
+    # The prompt is designed to elicit structured, personalized output:
+    # - "exactly N games" prevents Claude from over- or under-delivering
+    # - The four sub-bullets give Claude a consistent format to fill in
+    # - "Only recommend games from their library" prevents hallucination of
+    #   games the user doesn't own (a common failure mode for recommendation prompts)
     prompt = f"""You are a knowledgeable gaming advisor helping a player decide what to play next from their existing library.
 
 Here is the player's game library with playtime and ratings data:
@@ -100,25 +152,31 @@ End with a brief 2-3 sentence overall note about patterns you notice in their li
 Be specific, enthusiastic, and personalized to their actual library. Don't recommend games outside their library."""
 
     if stream_output:
+        # Stream mode: print each text chunk as it arrives so the CLI shows
+        # a live response rather than waiting for the full generation.
         result_parts = []
         with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=4096,
-            thinking={"type": "adaptive"},
+            thinking={"type": "adaptive"},  # Let Claude decide if extended thinking helps
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             for text in stream.text_stream:
-                print(text, end="", flush=True)
+                print(text, end="", flush=True)  # flush=True ensures real-time output
                 result_parts.append(text)
-        print()  # final newline
+        print()  # Add a trailing newline after the streamed output
         return "".join(result_parts)
     else:
+        # Non-streaming mode: wait for the complete response before returning.
+        # Used when streaming to stdout is not desired (e.g. piping to a file).
         response = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=4096,
             thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
         )
+        # Response content is a list of blocks (text + optional thinking blocks).
+        # We find the first text block and return it, ignoring thinking blocks.
         return next(
             (block.text for block in response.content if block.type == "text"), ""
         )

@@ -1,5 +1,4 @@
-"""
-Epic Games Store connector.
+"""Epic Games Store connector.
 
 Uses the unofficial Epic launcher OAuth2 flow, reverse-engineered from
 Legendary (https://github.com/derrod/legendary) and EpicResearch
@@ -18,34 +17,60 @@ import base64
 import requests
 from .models import Game
 
-# Launcher client credentials (launcherAppClient2 — used by Legendary, Heroic)
+# ── OAuth2 client credentials ──────────────────────────────────────────────────
+# These are the "launcherAppClient2" credentials used by third-party Epic clients
+# like Legendary and Heroic Games Launcher. They are publicly known and not secret
+# in the traditional sense — the same values appear in the Epic Launcher binary.
 _CLIENT_ID     = "34a02cf8f4414e29b15921876da36f9a"
 _CLIENT_SECRET = "daafbccc737745039dffe53d94fc76cf"
 
+# ── API endpoints ─────────────────────────────────────────────────────────────
+# This URL returns a JSON page with an "authorizationCode" field when the user
+# is already logged in. Visiting it while logged out shows the Epic login UI.
 EPIC_AUTH_URL = (
     f"https://www.epicgames.com/id/api/redirect"
     f"?clientId={_CLIENT_ID}&responseType=code"
 )
+
+# OAuth2 token endpoint for the launcher client
 _TOKEN_URL   = "https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token"
+
+# Library endpoint — returns all catalog items the account has entitlement to
 _LIBRARY_URL = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items"
 
 
 def _basic_auth() -> str:
+    """Build the HTTP Basic Auth header value for the token endpoint.
+
+    Epic's token API requires client credentials in the Authorization header
+    as Base64-encoded "client_id:client_secret". This is standard OAuth2
+    client authentication (RFC 6749 §2.3.1).
+    """
     raw = f"{_CLIENT_ID}:{_CLIENT_SECRET}"
     return "Basic " + base64.b64encode(raw.encode()).decode()
 
 
 def exchange_code(auth_code: str) -> dict:
-    """
-    Exchange an authorization code for tokens.
+    """Exchange an authorization code for access and refresh tokens.
 
-    Returns a dict with: access_token, refresh_token, account_id, expires_in.
-    Raises requests.HTTPError on failure.
+    Called immediately after the user copies their authorizationCode from
+    the EPIC_AUTH_URL page. The code is short-lived (typically ~5 minutes),
+    so this should be called promptly.
+
+    Args:
+        auth_code: The "authorizationCode" value from the Epic redirect JSON.
+
+    Returns:
+        Dict containing: access_token, refresh_token, account_id, expires_in.
+
+    Raises:
+        requests.HTTPError: If Epic rejects the code (e.g. expired or invalid).
+        requests.ConnectionError / requests.Timeout: On network failure.
     """
     resp = requests.post(
         _TOKEN_URL,
         headers={
-            "Authorization": _basic_auth(),
+            "Authorization": _basic_auth(),               # Client authentication
             "Content-Type": "application/x-www-form-urlencoded",
         },
         data={"grant_type": "authorization_code", "code": auth_code},
@@ -56,7 +81,21 @@ def exchange_code(auth_code: str) -> dict:
 
 
 def refresh_tokens(refresh_token: str) -> dict:
-    """Refresh an expired access token. Returns same shape as exchange_code."""
+    """Silently refresh an expired access token using the stored refresh token.
+
+    Epic access tokens typically expire after 2 hours. The web app calls this
+    automatically in _fetch_epic() when the first library fetch fails, so users
+    don't need to re-authenticate on every page load.
+
+    Args:
+        refresh_token: The refresh_token value from a previous exchange_code() call.
+
+    Returns:
+        Same dict shape as exchange_code() with fresh tokens.
+
+    Raises:
+        requests.HTTPError: If the refresh token is also expired (user must re-auth).
+    """
     resp = requests.post(
         _TOKEN_URL,
         headers={
@@ -71,47 +110,85 @@ def refresh_tokens(refresh_token: str) -> dict:
 
 
 def get_epic_library(access_token: str) -> list[Game]:
-    """
-    Fetch all games in the user's Epic library.
+    """Fetch all games in the user's Epic library.
 
-    Uses cursor-based pagination. Returns a list of Game objects.
-    Epic doesn't expose playtime, so playtime_minutes will be 0 for all.
+    Iterates through cursor-based pages of the library endpoint, collecting
+    all catalog records, then deduplicates and filters them into clean Game objects.
+
+    Pagination: the response includes responseMetadata.nextCursor when more pages
+    exist. An empty/missing cursor means we've reached the end.
+
+    Title resolution (in priority order):
+      1. metadata.title — the human-readable game name from Epic's catalog
+      2. appName — the internal launcher identifier (e.g. "Fortnite")
+      3. catalogId — a fallback UUID-like string (usually not user-friendly)
+
+    Filtering:
+      - Blank/whitespace titles are skipped
+      - Duplicate titles across pages are skipped (keeps first occurrence)
+      - 32-char alphanumeric strings are skipped — these are internal catalog
+        IDs that slip through as titles for add-ons, entitlements, and DLC
+        that have no separate display name
+
+    Args:
+        access_token: Bearer token from exchange_code() or refresh_tokens().
+
+    Returns:
+        List of Game objects sorted alphabetically. All have playtime_minutes=0
+        because Epic exposes no playtime data via any API.
+
+    Raises:
+        requests.HTTPError: On auth failure (401) or other API errors.
+        TypeError: If the API returns null for the "records" field (defensive check).
     """
+    # Use a persistent session so the Authorization header is sent on every
+    # paginated request without repeating it in every call.
     session = requests.Session()
     session.headers["Authorization"] = f"Bearer {access_token}"
 
-    records = []
-    cursor = None
+    records = []   # Accumulate raw records from all pages before processing
+    cursor = None  # Start without a cursor (first page)
 
+    # Paginate until the API stops returning a next cursor
     while True:
-        params: dict = {"includeMetadata": "true"}
+        params: dict = {"includeMetadata": "true"}  # metadata contains the human title
         if cursor:
-            params["cursor"] = cursor
+            params["cursor"] = cursor  # Add cursor only for pages 2+
 
         resp = session.get(_LIBRARY_URL, params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
+        # Extend (not append) to flatten pages into one flat record list
         records.extend(data.get("records", []))
+
+        # Extract next cursor; an empty string or missing key both stop pagination
         cursor = data.get("responseMetadata", {}).get("nextCursor")
         if not cursor:
             break
 
+    # ── Deduplicate and filter records into Game objects ──────────────────────
     games = []
-    seen = set()
+    seen = set()  # Track titles already added to prevent duplicates across pages
 
     for r in records:
+        # metadata may be None (missing DLC metadata) — coerce to empty dict
         metadata = r.get("metadata") or {}
+
+        # Resolve the best available title using the priority chain above
         title = (
             metadata.get("title")
             or r.get("appName")
             or r.get("catalogId", "")
         ).strip()
 
-        # Skip blank titles, internal tools, and duplicate catalog items
+        # Skip blank titles and titles already in the output
         if not title or title in seen:
             continue
-        # Heuristic: skip items that look like internal identifiers
+
+        # Heuristic filter: 32-character all-alphanumeric strings are internal
+        # Epic catalog IDs that appear as titles for entitlements and add-ons.
+        # Real game titles are either shorter or contain spaces/punctuation.
         if len(title) == 32 and title.isalnum():
             continue
 
@@ -119,7 +196,11 @@ def get_epic_library(access_token: str) -> list[Game]:
         games.append(Game(
             name=title,
             platform="epic",
+            # Prefer catalogId as the stable identifier; fall back to appName
             app_id=r.get("catalogId") or r.get("appName"),
+            # playtime_minutes intentionally omitted (defaults to 0) because
+            # Epic provides no playtime data through their public APIs
         ))
 
+    # Sort alphabetically so the output is deterministic and easy to scan
     return sorted(games, key=lambda g: g.name.lower())

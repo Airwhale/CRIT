@@ -2,6 +2,13 @@
 """
 Game Recommendation System — CLI entry point.
 
+This module wires together all the game_recommender sub-modules into a
+single command-line workflow:
+  1. Load games from Steam (via API) and/or manual JSON files
+  2. Sort by playtime (most-played first)
+  3. Optionally enrich top N games with RAWG ratings
+  4. Stream Claude's recommendations to stdout
+
 Usage:
   python main.py --help
   python main.py                          # Steam only (reads from .env)
@@ -24,6 +31,9 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
 
+# Load .env file before reading any environment variables.
+# This must happen at module level so env vars are available to sub-modules
+# that read them at import time (e.g. inside os.environ.get() calls).
 load_dotenv()
 
 console = Console()
@@ -121,7 +131,8 @@ def main(
       2. Run: python main.py
     """
 
-    # Handle template generation
+    # ── Template generation (early exits) ──────────────────────────────────────
+    # These flags just write a sample JSON file and exit — no API calls needed.
     if init_epic:
         from game_recommender.manual_import import create_example_json
         create_example_json("epic.json", "epic")
@@ -133,11 +144,12 @@ def main(
 
     all_games = []
 
-    # ── Steam ──────────────────────────────────────────────────────────────
+    # ── Steam ──────────────────────────────────────────────────────────────────
     if not no_steam:
         steam_key = os.environ.get("STEAM_API_KEY")
-        steam_id = os.environ.get("STEAM_USER_ID")
+        steam_id  = os.environ.get("STEAM_USER_ID")
         if not steam_key or not steam_id:
+            # Warn but don't crash — the user may have only Epic/GOG games
             console.print(
                 "[yellow]⚠ Steam API key or user ID not set — skipping Steam.[/yellow]\n"
                 "  Set STEAM_API_KEY and STEAM_USER_ID in your .env file."
@@ -150,14 +162,18 @@ def main(
                     console.print(f"[green]✓ Steam:[/green] {len(steam_games)} games loaded.")
                     all_games.extend(steam_games)
                 except Exception as e:
+                    # Steam errors are non-fatal — the user may still have
+                    # Epic/GOG games to fall back on
                     console.print(f"[red]✗ Steam error:[/red] {e}")
 
-    # ── Epic / GOG / Other ─────────────────────────────────────────────────
+    # ── Epic / GOG / Other (manual JSON imports) ───────────────────────────────
     from game_recommender.manual_import import load_from_json
 
+    # Process each platform's file if a path was provided.
+    # Using a loop avoids repeating the try/except for each platform.
     for path, platform in [
         (epic_library, "epic"),
-        (gog_library, "gog"),
+        (gog_library,  "gog"),
         (other_library, "other"),
     ]:
         if path:
@@ -170,6 +186,7 @@ def main(
             except Exception as e:
                 console.print(f"[red]✗ {platform.upper()} error:[/red] {e}")
 
+    # If nothing loaded from any source, there's nothing to recommend
     if not all_games:
         console.print(
             "\n[bold red]No games loaded.[/bold red] "
@@ -179,19 +196,22 @@ def main(
 
     console.print(f"\n[bold]Total library: {len(all_games)} games across all platforms.[/bold]")
 
-    # ── Sort & trim ────────────────────────────────────────────────────────
+    # ── Sort & trim ────────────────────────────────────────────────────────────
+    # Sort the combined multi-platform library by playtime descending.
+    # The LLM sees this order, so most-played games get more "weight" in context.
     all_games.sort(key=lambda g: g.playtime_minutes, reverse=True)
 
-    # ── Optional: show library table ───────────────────────────────────────
+    # ── Optional: show library table and exit ──────────────────────────────────
     if list_library:
         _print_library_table(all_games, max_rows=top)
         return
 
-    # ── Enrich with ratings ────────────────────────────────────────────────
+    # ── Enrich with RAWG ratings ───────────────────────────────────────────────
     rawg_key = os.environ.get("RAWG_API_KEY")
     games_for_llm = []
 
     if no_ratings or not rawg_key:
+        # Skip enrichment: wrap bare Game objects in GameWithRating with rating=None
         if not no_ratings and not rawg_key:
             console.print(
                 "[yellow]⚠ RAWG_API_KEY not set — skipping ratings enrichment.[/yellow]"
@@ -200,11 +220,12 @@ def main(
         games_for_llm = [GameWithRating(game=g) for g in all_games[:top]]
     else:
         from game_recommender.ratings import enrich_games
-        games_to_enrich = all_games[:top]
+        games_to_enrich = all_games[:top]  # Only enrich the top N by playtime
         console.print(
             f"\n[cyan]Fetching ratings for {len(games_to_enrich)} games from RAWG...[/cyan] "
             "(this may take a moment)"
         )
+        # Rich Progress shows a spinner and the current game name while enriching
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -213,6 +234,7 @@ def main(
             task = progress.add_task("", total=len(games_to_enrich))
 
             def on_progress(current, total, name):
+                # Update the task description to show which game is being fetched
                 progress.update(task, completed=current, description=f"[cyan]{name}[/cyan]")
 
             games_for_llm = enrich_games(
@@ -224,7 +246,7 @@ def main(
         rated = sum(1 for g in games_for_llm if g.rating is not None)
         console.print(f"[green]✓ Ratings found for {rated}/{len(games_for_llm)} games.[/green]")
 
-    # ── Get recommendations ────────────────────────────────────────────────
+    # ── Get recommendations from Claude ────────────────────────────────────────
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if not anthropic_key:
         console.print(
@@ -245,6 +267,7 @@ def main(
     from game_recommender.recommender import get_recommendations
 
     try:
+        # stream_output=True prints Claude's response to stdout in real time
         get_recommendations(
             games=games_for_llm,
             user_preferences=preferences,
@@ -258,18 +281,28 @@ def main(
 
 
 def _print_library_table(games, max_rows: int = 50):
-    """Print a Rich table of the user's game library."""
+    """Print a Rich formatted table of the user's combined game library.
+
+    Called when --list-library is passed. Useful for verifying that all
+    platforms loaded correctly before running the full recommendation pipeline.
+
+    Args:
+        games: Full sorted list of Game objects.
+        max_rows: How many rows to display before showing a truncation message.
+    """
     table = Table(title="Your Game Library", show_lines=False)
-    table.add_column("#", style="dim", width=4)
-    table.add_column("Game", style="bold")
+    table.add_column("#",        style="dim", width=4)
+    table.add_column("Game",     style="bold")
     table.add_column("Platform", style="cyan")
     table.add_column("Playtime", justify="right")
 
     for i, game in enumerate(games[:max_rows], 1):
+        # Show hours for played games, "unplayed" for 0-minute games
         playtime = f"{game.playtime_hours}h" if game.playtime_minutes > 0 else "unplayed"
         table.add_row(str(i), game.name, game.platform.upper(), playtime)
 
     if len(games) > max_rows:
+        # Add a footer row indicating how many games were omitted
         table.add_row("...", f"...and {len(games) - max_rows} more", "", "")
 
     console.print(table)
