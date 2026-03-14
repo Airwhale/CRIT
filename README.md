@@ -163,22 +163,30 @@ The free tier allows 20,000 requests/month. The app fetches ratings for up to 75
 
 ### Steam
 
-You need two things: an API key and your Steam ID.
+Steam can be connected in two ways — **no API key required** for the primary method:
 
-**API key:**
-1. Go to [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey)
-2. Log in and agree to the terms
-3. Enter any domain name (e.g. `localhost`) — it doesn't matter for personal use
-4. Your 32-character hex key will be displayed immediately
+**Option A — Login with Steam (recommended, no API key needed)**
 
-**Steam ID (64-bit):**
-1. Go to [steamid.io](https://steamid.io)
-2. Enter your Steam profile URL, username, or any ID format
-3. Copy the **steamID64** value — it starts with `765611...` and is 17 digits long
+Click **Login with Steam →** in the web UI. You'll be redirected to Steam's login page and sent straight back. Your Steam ID is detected automatically and your library is fetched via Steam's public XML feed.
 
-Both are entered directly in the web UI under **Connect Your Platforms → Steam**. They are validated against the Steam API when you click Connect.
+> Your library must be set to **public** in your Steam privacy settings for this to work. Go to Steam → Profile → Edit Profile → Privacy Settings → Game Details → **Public**.
 
-> Your library must be set to **public** in your Steam privacy settings, otherwise the API returns an empty list. Go to Steam → Profile → Edit Profile → Privacy Settings → Game Details → **Public**.
+**Option B — Manual credentials (also enables Steam Deals wishlist)**
+
+Enter your Steam ID and API key directly in the UI:
+
+- **Steam ID (64-bit):** Go to [steamid.io](https://steamid.io), enter your profile URL or username, and copy the **steamID64** value (starts with `765611...`, 17 digits).
+- **API key (optional but recommended):** Go to [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey), log in, enter any domain (e.g. `localhost`), and copy the 32-character hex key.
+
+**What changes with an API key?**
+
+| Feature | Without API key | With API key |
+|---|---|---|
+| Library fetch | ✓ (XML feed) | ✓ (Web API) |
+| Steam Deals — featured sales | ✓ | ✓ |
+| Steam Deals — wishlist check | ✗ | ✓ |
+
+You can connect via OpenID first (no API key) and then add an API key later using the **Add API key** option shown in the connected state.
 
 ### Epic Games
 

@@ -14,6 +14,7 @@ API returns an empty response object rather than a proper error code.
 """
 
 import os
+import xml.etree.ElementTree as ET
 import requests
 from typing import Optional
 from .models import Game
@@ -114,4 +115,71 @@ def get_steam_library(
     # Sort most-played first so the CLI and web UI default to the user's
     # most invested games near the top. The LLM also receives games in this
     # order, giving more context weight to heavily-played titles.
+    return sorted(games, key=lambda g: g.playtime_minutes, reverse=True)
+
+
+def get_steam_library_xml(user_id: str) -> list[Game]:
+    """Fetch the Steam library via the public XML feed — no API key required.
+
+    Steam exposes https://steamcommunity.com/profiles/{id}/games?xml=1 for
+    public profiles. It returns less data than the Web API (no last_played
+    timestamp, may omit some F2P titles), but requires zero credentials beyond
+    the 64-bit Steam ID (which OpenID login provides automatically).
+
+    Args:
+        user_id: Steam 64-bit user ID string (e.g. "76561198...").
+
+    Returns:
+        List of Game objects sorted by playtime descending.
+
+    Raises:
+        RuntimeError: If the profile is private or Steam returns an error node.
+        requests.HTTPError: On non-2xx HTTP responses.
+        requests.Timeout / requests.ConnectionError: On network failures.
+    """
+    response = requests.get(
+        f"https://steamcommunity.com/profiles/{user_id}/games",
+        params={"xml": "1"},
+        timeout=15,
+    )
+    response.raise_for_status()
+
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError as exc:
+        raise RuntimeError(f"Steam returned invalid XML: {exc}") from exc
+
+    # Steam sends <error>...</error> when the profile is private or ID is wrong
+    error_el = root.find("error")
+    if error_el is not None:
+        raise RuntimeError(error_el.text or "Steam returned an error")
+
+    games_el = root.find("games")
+    if games_el is None:
+        raise RuntimeError(
+            "No games found. Your Steam profile may be set to private.\n"
+            "Set your game details to public at: "
+            "https://steamcommunity.com/my/edit/settings"
+        )
+
+    games = []
+    for game_el in games_el.findall("game"):
+        app_id = game_el.findtext("appID", "")
+        name = game_el.findtext("name") or f"App {app_id}"
+        # hoursOnRecord is in hours (float) and uses comma thousands separators
+        # e.g. "1,234.5". Not present for unplayed games.
+        hours_text = (game_el.findtext("hoursOnRecord") or "0").replace(",", "")
+        try:
+            hours = float(hours_text)
+        except ValueError:
+            hours = 0.0
+
+        games.append(Game(
+            name=name,
+            platform="steam",
+            app_id=str(app_id),
+            playtime_minutes=int(hours * 60),
+            last_played=None,  # Not available in the XML feed
+        ))
+
     return sorted(games, key=lambda g: g.playtime_minutes, reverse=True)

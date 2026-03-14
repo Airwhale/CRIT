@@ -22,6 +22,8 @@ import uuid
 import json
 import asyncio
 import os
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -128,6 +130,80 @@ async def index():
     return (TEMPLATES_DIR / "index.html").read_text()
 
 
+# ── Auth: Steam OpenID redirect flow ──────────────────────────────────────────
+# Steam supports OpenID 2.0 so users can "Login with Steam" without needing to
+# generate a developer API key. After the redirect the Steam ID is extracted from
+# the verified claimed_id URL. The library is then fetched via the public XML feed
+# (no API key required). An API key can be added separately to unlock wishlist
+# support in Steam Deals mode.
+
+_STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
+
+
+@app.get("/auth/steam/start")
+async def steam_auth_start(request: Request, session_id: str | None = Cookie(default=None)):
+    """Redirect the browser to Steam's OpenID login page."""
+    sid, _ = _get_session(session_id)
+    base = str(request.base_url).rstrip("/")
+    return_to = f"{base}/auth/steam/callback"
+    realm = base + "/"
+    params = {
+        "openid.ns":         "http://specs.openid.net/auth/2.0",
+        "openid.mode":       "checkid_setup",
+        "openid.return_to":  return_to,
+        "openid.realm":      realm,
+        "openid.identity":   "http://specs.openid.net/auth/2.0/identifier_select",
+        "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
+    }
+    auth_url = _STEAM_OPENID_URL + "?" + "&".join(
+        f"{k}={quote_plus(v)}" for k, v in params.items()
+    )
+    response = RedirectResponse(auth_url)
+    _set_session_cookie(response, sid)
+    return response
+
+
+@app.get("/auth/steam/callback")
+async def steam_auth_callback(
+    request: Request,
+    session_id: str | None = Cookie(default=None),
+):
+    """Verify the Steam OpenID response and store the Steam ID in the session.
+
+    Steam redirects here after login with a signed set of openid.* query params.
+    We verify the signature by POSTing back to Steam with openid.mode=check_authentication
+    and checking for 'is_valid:true' in the response. If valid, the Steam ID is
+    extracted from the claimed_id URL and stored in the session (no API key).
+    """
+    params = dict(request.query_params)
+
+    if params.get("openid.mode") == "cancel":
+        return RedirectResponse("/?auth_error=login_cancelled")
+
+    # Replace mode and POST back to Steam for verification
+    verify_params = {**params, "openid.mode": "check_authentication"}
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(_STEAM_OPENID_URL, data=verify_params)
+
+    if "is_valid:true" not in resp.text:
+        return RedirectResponse("/?auth_error=steam_verification_failed")
+
+    # claimed_id looks like: https://steamcommunity.com/openid/id/76561198XXXXXXXXX
+    claimed_id = params.get("openid.claimed_id", "")
+    match = re.search(r"/openid/id/(\d+)$", claimed_id)
+    if not match:
+        return RedirectResponse("/?auth_error=could_not_extract_steam_id")
+
+    steam_id = match.group(1)
+    sid, session = _get_session(session_id)
+    # Store without api_key — XML fallback will be used for library fetches
+    session["steam"] = {"user_id": steam_id, "api_key": None}
+
+    response = RedirectResponse("/?auth_success=steam")
+    _set_session_cookie(response, sid)
+    return response
+
+
 # ── Auth: Epic OAuth redirect flow ────────────────────────────────────────────
 # This is the fully automated path: browser is redirected to Epic, user logs in,
 # Epic sends them back to our callback with ?code=XXX, we exchange silently.
@@ -214,10 +290,12 @@ async def get_status(session_id: str | None = Cookie(default=None)):
     a page refresh (as long as the session cookie and server process are alive).
     """
     _, session = _get_session(session_id)
+    steam_creds = session.get("steam")
     return {
-        "steam": "steam" in session,
-        "epic":  "epic"  in session,
-        "gog":   "gog"   in session,
+        "steam":             bool(steam_creds),
+        "steam_has_api_key": bool(steam_creds and steam_creds.get("api_key")),
+        "epic":              "epic" in session,
+        "gog":               "gog"  in session,
     }
 
 
@@ -230,47 +308,101 @@ async def connect_steam(
 ):
     """Validate and store Steam credentials.
 
-    Unlike Epic/GOG (which use OAuth), Steam uses a plain API key + user ID pair.
-    We validate the credentials by making a real GetOwnedGames call before storing
-    them, so the user gets an immediate error if the key or ID is wrong.
+    api_key is optional. When provided, credentials are validated via the Web API
+    (IPlayerService/GetOwnedGames). When omitted, the user_id is validated via the
+    public XML feed instead — no API key needed.
 
-    Request body (JSON): {"api_key": "...", "user_id": "..."}
+    Request body (JSON): {"user_id": "...", "api_key": "..."}  (api_key optional)
     Response: {"ok": true, "game_count": N}
     """
     body = await request.json()
-    # Strip whitespace — a key/ID that is only spaces should be treated as empty
-    api_key = (body.get("api_key") or "").strip()
+    api_key = (body.get("api_key") or "").strip() or None
     user_id = (body.get("user_id") or "").strip()
 
-    if not api_key or not user_id:
-        raise HTTPException(400, "api_key and user_id are required")
+    if not user_id:
+        raise HTTPException(400, "user_id is required")
 
-    # Validate credentials with a live Steam API call using httpx (async HTTP client)
-    url = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/"
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(url, params={
-            "key":              api_key,
-            "steamid":          user_id,
-            "include_appinfo":  True,
-            "format":           "json",
-        })
+    if api_key:
+        # Validate with the Steam Web API
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/",
+                params={
+                    "key":             api_key,
+                    "steamid":         user_id,
+                    "include_appinfo": True,
+                    "format":          "json",
+                },
+            )
+        if resp.status_code != 200:
+            raise HTTPException(400, f"Steam API error: {resp.status_code}")
+        data = resp.json()
+        if not data.get("response"):
+            raise HTTPException(400, "No response from Steam. Is your profile public?")
+        game_count = len(data["response"].get("games", []))
+    else:
+        # Validate via the public XML feed (no API key required)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://steamcommunity.com/profiles/{user_id}/games",
+                params={"xml": "1"},
+            )
+        if resp.status_code != 200:
+            raise HTTPException(400, f"Steam returned HTTP {resp.status_code}")
+        try:
+            root = ET.fromstring(resp.text)
+        except ET.ParseError:
+            raise HTTPException(400, "Steam returned invalid data. Is the Steam ID correct?")
+        error_el = root.find("error")
+        if error_el is not None:
+            raise HTTPException(400, f"Steam error: {error_el.text}")
+        games_el = root.find("games")
+        if games_el is None:
+            raise HTTPException(400, "No games found. Is your Steam profile set to public?")
+        game_count = len(games_el.findall("game"))
 
-    if resp.status_code != 200:
-        raise HTTPException(400, f"Steam API error: {resp.status_code}")
-
-    data = resp.json()
-    # An empty response dict means the profile is private
-    if not data.get("response"):
-        raise HTTPException(400, "No response from Steam. Is your profile public?")
-
-    # Credentials are valid — store in session
     sid, session = _get_session(session_id)
     session["steam"] = {"api_key": api_key, "user_id": user_id}
 
-    # Return game_count so the frontend can show "Connected (523 games)"
-    response = JSONResponse({"ok": True, "game_count": len(data["response"].get("games", []))})
+    response = JSONResponse({"ok": True, "game_count": game_count})
     _set_session_cookie(response, sid)
     return response
+
+
+@app.post("/api/auth/steam/apikey")
+async def add_steam_apikey(
+    request: Request,
+    session_id: str | None = Cookie(default=None),
+):
+    """Add or replace the Steam API key on an existing Steam session.
+
+    Used after an OpenID login (which stores only the user_id) to unlock
+    wishlist support in Steam Deals mode.
+
+    Request body (JSON): {"api_key": "..."}
+    """
+    _, session = _get_session(session_id)
+    if "steam" not in session:
+        raise HTTPException(400, "Connect Steam first before adding an API key")
+
+    body = await request.json()
+    api_key = (body.get("api_key") or "").strip()
+    if not api_key:
+        raise HTTPException(400, "api_key is required")
+
+    user_id = session["steam"]["user_id"]
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/",
+            params={"key": api_key, "steamid": user_id, "format": "json"},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(400, f"Steam API error: {resp.status_code}")
+    if not resp.json().get("response"):
+        raise HTTPException(400, "API key validation failed. Is your profile public?")
+
+    session["steam"]["api_key"] = api_key
+    return JSONResponse({"ok": True})
 
 
 # ── Auth: Epic (manual code fallback) ─────────────────────────────────────────
@@ -452,10 +584,17 @@ async def get_library(
 def _fetch_steam(creds: dict) -> list[dict]:
     """Fetch the Steam library for the credentials stored in session.
 
-    Converts Game objects to plain dicts for JSON serialization.
+    Uses the Web API when an api_key is present; falls back to the public
+    XML feed when only a user_id is stored (e.g. after OpenID login).
     """
-    from game_recommender.steam import get_steam_library
-    games = get_steam_library(creds["api_key"], creds["user_id"])
+    api_key = creds.get("api_key")
+    user_id = creds["user_id"]
+    if api_key:
+        from game_recommender.steam import get_steam_library
+        games = get_steam_library(api_key, user_id)
+    else:
+        from game_recommender.steam import get_steam_library_xml
+        games = get_steam_library_xml(user_id)
     return [_game_to_dict(g) for g in games]
 
 
@@ -616,18 +755,20 @@ async def recommend(
             # owned_ids lets get_all_sales filter out games the user already owns
             owned_ids = {g["app_id"] for g in games_raw if g.get("app_id")}
 
-            if include_wishlist and steam_creds:
+            has_steam_key = bool(steam_creds.get("api_key"))
+            if include_wishlist and steam_creds and has_steam_key:
                 yield status(
-                    f"Checking your wishlist for discounts — up to 100 items, ~20 sec…"
+                    "Checking your wishlist for discounts — up to 100 items, ~20 sec…"
                 )
 
             try:
-                # Run the synchronous sale fetcher in a thread pool
+                # Run the synchronous sale fetcher in a thread pool.
+                # Wishlist requires an API key; skip it silently if not available.
                 sale_games = await asyncio.to_thread(
                     _fetch_sales,
                     min_discount,
                     steam_creds,
-                    include_wishlist,
+                    include_wishlist and has_steam_key,
                     owned_ids,
                 )
             except Exception as e:
@@ -694,7 +835,11 @@ def _fetch_sales(
     include_wishlist: bool,
     owned_ids: set[str],
 ) -> list:
-    """Wrapper around get_all_sales, extracting credentials from the session dict."""
+    """Wrapper around get_all_sales, extracting credentials from the session dict.
+
+    include_wishlist should already be False when no api_key is present;
+    get_all_sales also handles None api_key gracefully by skipping the wishlist.
+    """
     from game_recommender.steam_sales import get_all_sales
     return get_all_sales(
         min_discount=min_discount,

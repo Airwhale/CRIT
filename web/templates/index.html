@@ -418,24 +418,51 @@
           <span class="pf-status" id="steam-status">Not connected</span>
         </div>
         <div class="pf-body" id="steam-form">
-          <div>
-            <label>Steam API Key
-              <a href="https://steamcommunity.com/dev/apikey" target="_blank" style="font-size:0.72rem;margin-left:4px;">(get one)</a>
-            </label>
-            <input type="password" id="steam-api-key" placeholder="32-char hex key">
-          </div>
-          <div>
-            <label>Steam ID (64-bit)
-              <a href="https://steamid.io" target="_blank" style="font-size:0.72rem;margin-left:4px;">(find yours)</a>
-            </label>
-            <input type="text" id="steam-user-id" placeholder="7656119...">
-          </div>
-          <div class="notice error" id="steam-error"></div>
-          <button class="btn-platform btn-steam" id="steam-connect-btn" onclick="connectSteam()">
-            Connect Steam
+          <small style="color:var(--muted);">Sign in with Steam — no API key needed. Your library is fetched via Steam's public profile.</small>
+          <button class="btn-platform btn-steam" onclick="window.location='/auth/steam/start'">
+            Login with Steam →
           </button>
+          <details style="margin-top:0.4rem;">
+            <summary style="font-size:0.8rem;color:var(--muted);cursor:pointer;user-select:none;">
+              Or enter credentials manually
+            </summary>
+            <div style="margin-top:0.6rem;display:flex;flex-direction:column;gap:0.5rem;">
+              <div>
+                <label>Steam ID (64-bit)
+                  <a href="https://steamid.io" target="_blank" style="font-size:0.72rem;margin-left:4px;">(find yours)</a>
+                </label>
+                <input type="text" id="steam-user-id" placeholder="7656119...">
+              </div>
+              <div>
+                <label>API Key <span style="color:var(--border);font-weight:400;">(optional)</span>
+                  <a href="https://steamcommunity.com/dev/apikey" target="_blank" style="font-size:0.72rem;margin-left:4px;">(get one)</a>
+                </label>
+                <input type="password" id="steam-api-key" placeholder="32-char hex key — needed for wishlist deals">
+              </div>
+              <div class="notice error" id="steam-error"></div>
+              <button class="btn-platform btn-steam" id="steam-connect-btn" onclick="connectSteam()">
+                Connect Steam
+              </button>
+            </div>
+          </details>
         </div>
-        <div id="steam-connected" hidden>
+        <!-- Connected without API key -->
+        <div id="steam-connected-basic" hidden>
+          <div class="notice success visible">✓ Steam connected</div>
+          <details style="margin-top:0.5rem;">
+            <summary style="font-size:0.8rem;color:var(--muted);cursor:pointer;user-select:none;">
+              Add API key to enable wishlist in Steam Deals
+            </summary>
+            <div style="margin-top:0.5rem;display:flex;gap:0.4rem;align-items:flex-start;">
+              <input type="password" id="steam-apikey-upgrade" placeholder="32-char hex key" style="flex:1;">
+              <button style="background:var(--steam);color:#fff;white-space:nowrap;padding:0.5rem 0.75rem;font-size:0.82rem;" onclick="saveApiKey()">Save</button>
+            </div>
+            <div class="notice error" id="steam-apikey-error" style="margin-top:4px;"></div>
+          </details>
+          <button class="btn-platform btn-disconnect" onclick="disconnect('steam')" style="margin-top:0.4rem;">Disconnect</button>
+        </div>
+        <!-- Connected with API key -->
+        <div id="steam-connected-full" hidden>
           <div class="notice success visible">✓ Steam connected</div>
           <button class="btn-platform btn-disconnect" onclick="disconnect('steam')">Disconnect</button>
         </div>
@@ -668,7 +695,7 @@ let _gogFallbackTimer = null;
 
   try {
     const status = await apiFetch('/api/status');
-    if (status.steam) markConnected('steam');
+    if (status.steam) markConnected('steam', status.steam_has_api_key);
     if (status.epic)  markConnected('epic');
     if (status.gog)   markConnected('gog');
     if (status.steam || status.epic || status.gog) {
@@ -711,27 +738,45 @@ function clearError(id) {
   el.classList.remove('visible');
 }
 
-function markConnected(platform) {
+function markConnected(platform, hasApiKey) {
   const card = document.getElementById(`${platform}-card`);
   const form = document.getElementById(`${platform}-form`);
-  const conn = document.getElementById(`${platform}-connected`);
   const status = document.getElementById(`${platform}-status`);
   card.classList.add('connected');
   status.textContent = 'Connected ✓';
   form.setAttribute('hidden', '');
-  conn.removeAttribute('hidden');
+
+  if (platform === 'steam') {
+    const basic = document.getElementById('steam-connected-basic');
+    const full  = document.getElementById('steam-connected-full');
+    if (hasApiKey) {
+      basic.setAttribute('hidden', '');
+      full.removeAttribute('hidden');
+    } else {
+      full.setAttribute('hidden', '');
+      basic.removeAttribute('hidden');
+    }
+  } else {
+    document.getElementById(`${platform}-connected`).removeAttribute('hidden');
+  }
+
   document.getElementById('library-section').removeAttribute('hidden');
 }
 
 function markDisconnected(platform) {
   const card = document.getElementById(`${platform}-card`);
   const form = document.getElementById(`${platform}-form`);
-  const conn = document.getElementById(`${platform}-connected`);
   const status = document.getElementById(`${platform}-status`);
   card.classList.remove('connected');
   status.textContent = 'Not connected';
   form.removeAttribute('hidden');
-  conn.setAttribute('hidden', '');
+
+  if (platform === 'steam') {
+    document.getElementById('steam-connected-basic').setAttribute('hidden', '');
+    document.getElementById('steam-connected-full').setAttribute('hidden', '');
+  } else {
+    document.getElementById(`${platform}-connected`).setAttribute('hidden', '');
+  }
 }
 
 // ── Steam ──────────────────────────────────────────────────────────────────────
@@ -739,7 +784,7 @@ async function connectSteam() {
   clearError('steam-error');
   const apiKey = document.getElementById('steam-api-key').value.trim();
   const userId = document.getElementById('steam-user-id').value.trim();
-  if (!apiKey || !userId) { showError('steam-error', 'Both fields are required.'); return; }
+  if (!userId) { showError('steam-error', 'Steam ID is required.'); return; }
 
   const btn = document.getElementById('steam-connect-btn');
   btn.disabled = true;
@@ -748,14 +793,33 @@ async function connectSteam() {
     await apiFetch('/api/auth/steam', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: apiKey, user_id: userId }),
+      body: JSON.stringify({ api_key: apiKey || null, user_id: userId }),
     });
-    markConnected('steam');
+    markConnected('steam', !!apiKey);
   } catch(e) {
     showError('steam-error', e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Connect Steam';
+  }
+}
+
+async function saveApiKey() {
+  clearError('steam-apikey-error');
+  const apiKey = document.getElementById('steam-apikey-upgrade').value.trim();
+  if (!apiKey) { showError('steam-apikey-error', 'Enter your API key first.'); return; }
+  try {
+    await apiFetch('/api/auth/steam/apikey', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    // Upgrade the connected display to "full" (with API key)
+    document.getElementById('steam-connected-basic').setAttribute('hidden', '');
+    document.getElementById('steam-connected-full').removeAttribute('hidden');
+    showToast('✓ Steam API key saved — wishlist deals enabled!', 'success');
+  } catch(e) {
+    showError('steam-apikey-error', e.message);
   }
 }
 
