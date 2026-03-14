@@ -145,14 +145,23 @@ def get_steam_library_xml(user_id: str) -> list[Game]:
     )
     response.raise_for_status()
 
+    # Parse strategy:
+    # 1. Feed raw bytes so the XML parser honours the declared encoding (UTF-8).
+    #    requests.text auto-detects encoding and defaults to ISO-8859-1 for
+    #    text/* responses with no charset header, mangling multi-byte characters
+    #    in game names (accented letters, CJK titles, etc.).
+    # 2. If that still fails (unescaped & in game names, stray control chars),
+    #    decode as UTF-8 and sanitise before a second attempt.
     try:
-        # Steam's XML feed sometimes contains unescaped & in game names and
-        # stray control characters — sanitise before parsing.
-        text = re.sub(r'&(?!(?:amp|lt|gt|apos|quot|#\d+|#x[0-9a-fA-F]+);)', '&amp;', response.text)
+        root = ET.fromstring(response.content)
+    except ET.ParseError:
+        text = response.content.decode("utf-8", errors="replace")
+        text = re.sub(r'&(?!(?:amp|lt|gt|apos|quot|#\d+|#x[0-9a-fA-F]+);)', '&amp;', text)
         text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
-        root = ET.fromstring(text)
-    except ET.ParseError as exc:
-        raise RuntimeError(f"Steam returned invalid XML: {exc}") from exc
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError as exc:
+            raise RuntimeError(f"Steam returned invalid XML: {exc}") from exc
 
     # Steam sends <error>...</error> when the profile is private or ID is wrong
     error_el = root.find("error")
