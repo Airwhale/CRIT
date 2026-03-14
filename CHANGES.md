@@ -67,3 +67,13 @@
 
 #### `README.md`
 - Rewrote the **Epic Games** section to document the manual code flow as the only supported method, with a note explaining why redirect URIs are not supported by this client ID.
+
+---
+
+### Fix GOG login popup — white page
+
+**Problem:** The GOG login popup showed a blank white page. Two causes:
+1. `auth.gog.com` has been replaced by `login.gog.com` as GOG's auth endpoint.
+2. `layout=client2` is GOG Galaxy's headless desktop layout — it renders a minimal page not intended for browser display, causing the white page.
+
+**Fix:** Updated `GOG_AUTH_URL` in both `gog.py` and `index.html` to use `login.gog.com` and removed the `layout=client2` parameter.

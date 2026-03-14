@@ -848,9 +848,9 @@ async function submitEpicCode() {
 //      same origin (won't for GOG, but costs nothing to try).
 //   3. After 90s with no auto-capture, show the URL-bar paste fallback.
 
-const GOG_AUTH_URL = 'https://auth.gog.com/auth?client_id=46899977096215655' +
+const GOG_AUTH_URL = 'https://login.gog.com/auth?client_id=46899977096215655' +
   '&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success%3Forigin%3Dclient' +
-  '&response_type=code&layout=client2';
+  '&response_type=code';
 
 function startGogAuth() {
   clearError('gog-error');

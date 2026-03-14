@@ -36,11 +36,10 @@ _PRODUCTS_URL = "https://embed.gog.com/account/getFilteredProducts"
 # Full GOG login URL — open this in a browser; after login GOG redirects to
 # embed.gog.com with ?code=XXXX in the URL bar, which the user must copy.
 GOG_AUTH_URL = (
-    f"https://auth.gog.com/auth"
+    f"https://login.gog.com/auth"
     f"?client_id={_CLIENT_ID}"
     f"&redirect_uri={_REDIRECT_URI}"
     f"&response_type=code"
-    f"&layout=client2"  # layout=client2 gives a compact login page suitable for popups
 )
 
 
