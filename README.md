@@ -26,62 +26,49 @@ An AI-powered game recommendation web app. Connect your Steam, Epic Games, and G
 
 ## Local setup
 
-### 1. Clone the repo
+Choose the block for your OS, paste it all at once, then edit `.env` before the final run.
+
+### Linux / macOS
 
 ```bash
 git clone <repo-url>
 cd claude
-```
-
-### 2. Create a virtual environment
-
-**Linux / macOS:**
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
 ```
 
-**Windows (Command Prompt):**
+### Windows (Command Prompt)
+
 ```cmd
+git clone <repo-url>
+cd claude
 python -m venv .venv
 .venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
 ```
 
-**Windows (PowerShell):**
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
+### Windows (PowerShell)
 
 > If PowerShell blocks the script with an execution policy error, run this first:
 > ```powershell
 > Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 > ```
 
-### 3. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configure environment variables
-
-**Linux / macOS** — copy the example file:
-```bash
-cp .env.example .env
-```
-
-**Windows (Command Prompt):**
-```cmd
-copy .env.example .env
-```
-
-**Windows (PowerShell):**
 ```powershell
+git clone <repo-url>
+cd claude
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Open `.env` in any text editor and set:
+### Configure and run
+
+Open `.env` and set:
 
 ```dotenv
 ANTHROPIC_API_KEY=sk-ant-...          # from console.anthropic.com
@@ -89,8 +76,6 @@ RAWG_API_KEY=...                      # from rawg.io/apidocs (free)
 ```
 
 Steam credentials are entered in the web UI rather than `.env` — they are stored in the server's in-memory session for the duration of the process.
-
-### 5. Run
 
 ```bash
 python run_web.py
