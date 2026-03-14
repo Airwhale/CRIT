@@ -138,10 +138,19 @@ def get_steam_library_xml(user_id: str) -> list[Game]:
         requests.HTTPError: On non-2xx HTTP responses.
         requests.Timeout / requests.ConnectionError: On network failures.
     """
+    # Steam blocks the default python-requests User-Agent and returns an HTML
+    # error page instead of XML. Sending a browser-like UA avoids that.
     response = requests.get(
         f"https://steamcommunity.com/profiles/{user_id}/games",
         params={"xml": "1"},
         timeout=15,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+        },
     )
     response.raise_for_status()
 
