@@ -478,17 +478,15 @@
           <span class="pf-status" id="epic-status">Not connected</span>
         </div>
         <div class="pf-body" id="epic-form">
-          <small style="color:var(--muted);">You'll be redirected to Epic's login page and sent straight back — no copy-pasting needed.</small>
-          <button class="btn-platform btn-epic" id="epic-connect-btn" onclick="startEpicAuth()">
-            Connect with Epic →
-          </button>
-          <!-- Shown only if the redirect flow fails and falls back to manual -->
-          <div class="code-instructions" id="epic-fallback" style="display:none;">
-            <div class="step">Fallback: paste code manually</div>
-            <p>Open <a href="https://www.epicgames.com/id/api/redirect?clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code" target="_blank">this Epic page</a> while logged in, copy the <code style="color:var(--accent2)">authorizationCode</code> value from the JSON, and paste it here.</p>
+          <div class="code-instructions" id="epic-fallback">
+            <p>
+              1. Open <a href="https://www.epicgames.com/id/api/redirect?clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code" target="_blank">this Epic page</a> while logged in.<br>
+              2. Copy the <code style="color:var(--accent2)">authorizationCode</code> value from the JSON.<br>
+              3. Paste it below and click Connect.
+            </p>
             <div class="row" style="gap:0.5rem;margin-top:6px;">
               <input type="text" id="epic-code" placeholder="Paste authorizationCode…">
-              <button style="background:var(--accent);color:#fff;white-space:nowrap;" onclick="submitEpicCode()">Submit</button>
+              <button class="btn-platform btn-epic" style="white-space:nowrap;" onclick="submitEpicCode()">Connect</button>
             </div>
           </div>
           <div class="notice error" id="epic-error" style="margin-top:4px;"></div>
@@ -685,11 +683,7 @@ let _gogFallbackTimer = null;
   }
   if (params.has('auth_error')) {
     const msg = decodeURIComponent(params.get('auth_error'));
-    // Epic redirect flow failed — show manual fallback
-    if (msg !== 'login_cancelled') {
-      document.getElementById('epic-fallback').style.display = 'block';
-      showToast('Epic redirect failed — use the manual code below', 'error');
-    }
+    if (msg !== 'login_cancelled') showToast('Auth error: ' + msg, 'error');
     history.replaceState({}, '', '/');
   }
 
@@ -824,14 +818,9 @@ async function saveApiKey() {
 }
 
 // ── Epic ───────────────────────────────────────────────────────────────────────
-// Primary flow: full-page redirect through our server → Epic → back here.
-// The server handles the code exchange; we just detect the ?auth_success param on return.
-// Fallback (shown if redirect fails): manual code paste via submitEpicCode().
-
-function startEpicAuth() {
-  // Navigate the whole page — server will redirect to Epic, Epic redirects back.
-  window.location.href = '/auth/epic/start';
-}
+// Epic's launcher client ID does not support custom redirect URIs, so the OAuth
+// redirect flow is not available. Users must copy the authorizationCode manually
+// from the Epic redirect page and paste it here.
 
 async function submitEpicCode() {
   clearError('epic-error');
@@ -845,7 +834,6 @@ async function submitEpicCode() {
       body: JSON.stringify({ auth_code: code }),
     });
     markConnected('epic');
-    document.getElementById('epic-fallback').style.display = 'none';
   } catch(e) {
     showError('epic-error', 'Auth failed: ' + e.message);
   }

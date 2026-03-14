@@ -175,9 +175,12 @@ You can connect via OpenID first (no API key) and then add an API key later usin
 
 ### Epic Games
 
-Epic uses OAuth. In the web UI, click **Connect with Epic →** and you will be redirected to Epic's login page. After signing in you are sent straight back — no copy-pasting required.
+Epic's client ID used here (`34a02cf8f4414e29b15921876da36f9a`) is the public launcher client, which does not support custom redirect URIs. Connection requires a one-time manual copy-paste:
 
-If the redirect fails (e.g. because you are behind a reverse proxy that changes the callback URL), a fallback appears: open the link shown, copy the `authorizationCode` value from the JSON response, and paste it in.
+1. In the web UI, click the Epic page link shown in the Connect panel
+2. Log in to Epic if prompted — the page returns a JSON object
+3. Copy the value of `authorizationCode` from the JSON
+4. Paste it into the input field and click **Connect**
 
 ### GOG
 
