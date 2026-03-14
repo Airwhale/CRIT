@@ -35,10 +35,28 @@ cd claude
 
 ### 2. Create a virtual environment
 
+**Linux / macOS:**
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 ```
+
+**Windows (Command Prompt):**
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+> If PowerShell blocks the script with an execution policy error, run this first:
+> ```powershell
+> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+> ```
 
 ### 3. Install dependencies
 
@@ -48,13 +66,22 @@ pip install -r requirements.txt
 
 ### 4. Configure environment variables
 
-Copy the example file and fill in your keys:
-
+**Linux / macOS** — copy the example file:
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and set:
+**Windows (Command Prompt):**
+```cmd
+copy .env.example .env
+```
+
+**Windows (PowerShell):**
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` in any text editor and set:
 
 ```dotenv
 ANTHROPIC_API_KEY=sk-ant-...          # from console.anthropic.com
