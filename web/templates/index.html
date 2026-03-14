@@ -915,6 +915,8 @@ function _gogCleanup() {
   clearTimeout(_gogFallbackTimer);
   _gogPollTimer = null;
   _gogFallbackTimer = null;
+  if (_gogPopup && !_gogPopup.closed) _gogPopup.close();
+  _gogPopup = null;
   document.getElementById('gog-waiting').style.display = 'none';
   document.getElementById('gog-connect-btn').disabled = false;
 }
