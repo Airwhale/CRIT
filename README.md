@@ -75,6 +75,44 @@ To stop the server press `Ctrl+C`.
 
 ---
 
+## Testing
+
+The test suite covers every module with both success and failure scenarios. No real network calls are made — all external APIs (Steam, Epic, GOG, RAWG, Claude) are mocked.
+
+### Run the tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+Expected output: **112 tests, 0 failures.**
+
+### Test layout
+
+```
+tests/
+├── conftest.py          — shared fixtures: fake Claude stream, FAKE_GAMES, SSE parser
+├── test_steam.py        — Steam library fetch (15 tests)
+├── test_epic.py         — Epic OAuth + library (15 tests)
+├── test_gog.py          — GOG OAuth + library (13 tests)
+├── test_ratings.py      — RAWG ratings + enrich_games (15 tests)
+├── test_steam_sales.py  — featured specials, wishlist, get_all_sales (25 tests)
+└── test_web_api.py      — FastAPI endpoints end-to-end (29 tests)
+```
+
+### What's covered
+
+| Module | Success paths | Failure paths |
+|---|---|---|
+| Steam | Sorted results, field mapping, fallback names, `last_played=0→None`, env-var creds | Missing/empty key or ID, private profile, HTTP 401/403, timeout, connection error |
+| Epic | Token exchange & refresh, single/paginated library, dedup, 32-char ID skip, title fallbacks | Bad auth code, expired refresh token, HTTP error on library |
+| GOG | Token exchange & refresh, single/paginated library, alphabetical sort, blank-title skip | Bad code, expired token, HTTP / network error |
+| Ratings | Full `GameRating` fields, `None` on no results, case-insensitive cache, tags capped at 10, progress callback | Missing API key, HTTP error, network error |
+| Steam sales | Discount filtering & sorting, price formatting, wishlist date ordering, `max_check` cap, `get_all_sales` merge / dedup / owned-game filter | HTTP errors, failed appdetails batch skipped silently, featured/wishlist errors handled gracefully |
+| Web API | HTML + security headers, Steam auth + cookie, platform status, disconnect, library endpoint, SSE streaming for all three recommendation modes, `count` clamping | Missing fields (400), no session, no `ANTHROPIC_API_KEY`, invalid mode, preferences too long, empty library → streamed error, Claude exception → streamed error |
+
+---
+
 ## Getting your API keys
 
 ### Anthropic (required)
