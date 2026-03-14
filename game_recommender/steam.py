@@ -145,6 +145,15 @@ def get_steam_library_xml(user_id: str) -> list[Game]:
     )
     response.raise_for_status()
 
+    # Guard against Steam returning an HTML page (rate-limit, Cloudflare
+    # challenge, login redirect) — these arrive as 200 OK but aren't XML.
+    sniff = response.content.lstrip()[:5].lower()
+    if sniff.startswith(b"<!doc") or sniff.startswith(b"<html"):
+        raise RuntimeError(
+            "Steam returned an HTML page instead of XML. "
+            "You may be rate-limited — wait a minute and try again."
+        )
+
     # Parse strategy:
     # 1. Feed raw bytes so the XML parser honours the declared encoding (UTF-8).
     #    requests.text auto-detects encoding and defaults to ISO-8859-1 for
