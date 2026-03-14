@@ -31,7 +31,7 @@ Choose the block for your OS, paste it all at once, then edit `.env` before the 
 ### Linux / macOS
 
 ```bash
-git clone [<repo-url>](https://github.com/Airwhale/claude/blob/claude/game-recommendation-system-FAohj)
+git clone https://github.com/Airwhale/claude/blob/claude/game-recommendation-system-FAohj
 cd claude
 python3 -m venv .venv
 source .venv/bin/activate
