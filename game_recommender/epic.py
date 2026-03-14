@@ -118,17 +118,16 @@ def get_epic_library(access_token: str) -> list[Game]:
     Pagination: the response includes responseMetadata.nextCursor when more pages
     exist. An empty/missing cursor means we've reached the end.
 
-    Title resolution (in priority order):
-      1. metadata.title — the human-readable game name from Epic's catalog
-      2. appName — the internal launcher identifier (e.g. "Fortnite")
-      3. catalogId — a fallback UUID-like string (usually not user-friendly)
+    Title resolution:
+      Only metadata.title is used. appName and catalogId are internal
+      codenames (e.g. "Arrowroot", "bobcat") set by Epic engineers and
+      are never shown to users. Records without a metadata.title are
+      internal engine/service entitlements and are skipped entirely.
 
     Filtering:
+      - Records with no metadata.title are skipped (internal entitlements)
       - Blank/whitespace titles are skipped
       - Duplicate titles across pages are skipped (keeps first occurrence)
-      - 32-char alphanumeric strings are skipped — these are internal catalog
-        IDs that slip through as titles for add-ons, entitlements, and DLC
-        that have no separate display name
 
     Args:
         access_token: Bearer token from exchange_code() or refresh_tokens().
@@ -172,24 +171,17 @@ def get_epic_library(access_token: str) -> list[Game]:
     seen = set()  # Track titles already added to prevent duplicates across pages
 
     for r in records:
-        # metadata may be None (missing DLC metadata) — coerce to empty dict
+        # metadata may be None for internal engine/service entitlements.
+        # Only metadata.title is a human-readable name set by Epic's catalog;
+        # appName and catalogId are internal identifiers / codenames (e.g.
+        # "Arrowroot", "bobcat") that are not meaningful to users.
+        # Skipping records with no metadata.title filters out all those noise
+        # entries while keeping every actual purchasable / free game.
         metadata = r.get("metadata") or {}
+        title = metadata.get("title", "").strip()
 
-        # Resolve the best available title using the priority chain above
-        title = (
-            metadata.get("title")
-            or r.get("appName")
-            or r.get("catalogId", "")
-        ).strip()
-
-        # Skip blank titles and titles already in the output
+        # Skip entries with no real title or duplicates
         if not title or title in seen:
-            continue
-
-        # Heuristic filter: 32-character all-alphanumeric strings are internal
-        # Epic catalog IDs that appear as titles for entitlements and add-ons.
-        # Real game titles are either shorter or contain spaces/punctuation.
-        if len(title) == 32 and title.isalnum():
             continue
 
         seen.add(title)
