@@ -297,6 +297,61 @@
   #rec-output em { color: var(--muted); font-style: italic; }
   #rec-output hr { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
 
+  /* ── Mode tabs ── */
+  .mode-tabs {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+  .mode-tab {
+    flex: 1;
+    background: var(--bg3);
+    color: var(--muted);
+    border: none;
+    border-radius: 0;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    border-right: 1px solid var(--border);
+  }
+  .mode-tab:last-child { border-right: none; }
+  .mode-tab:hover:not(.active) { background: var(--bg2); color: var(--text); }
+  .mode-tab.active { background: var(--accent); color: #fff; }
+
+  /* mode-specific option panels */
+  .mode-opts {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    font-size: 0.85rem;
+  }
+  .mode-opts label { margin-bottom: 0; color: var(--text); }
+  .mode-opts input[type=range] { width: 110px; accent-color: var(--accent); }
+  .mode-opts input[type=number] { width: 70px; }
+  .mode-opts .opt-val { color: var(--accent2); font-weight: 700; min-width: 36px; display: inline-block; }
+  .mode-opts input[type=checkbox] { accent-color: var(--accent); width: auto; }
+
+  /* status line inside rec-output */
+  .rec-status {
+    color: var(--muted);
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+  }
+
   /* ── Spinner ── */
   .spinner {
     display: inline-block;
@@ -528,6 +583,36 @@
       <h2>Get Recommendations</h2>
     </div>
 
+    <!-- Mode tabs -->
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="library" onclick="setMode('library')">🎮 From Library</button>
+      <button class="mode-tab"        data-mode="sales"   onclick="setMode('sales')">🛒 Steam Deals</button>
+      <button class="mode-tab"        data-mode="new"     onclick="setMode('new')">📦 Backlog</button>
+    </div>
+
+    <!-- Sales mode options -->
+    <div class="mode-opts" id="opts-sales" hidden>
+      <label>
+        Min discount:
+        <input type="range" id="min-discount" min="10" max="80" step="10" value="40"
+               oninput="document.getElementById('min-discount-val').textContent = this.value + '%'">
+        <span class="opt-val" id="min-discount-val">40%</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
+        <input type="checkbox" id="include-wishlist" checked>
+        Include my wishlist
+      </label>
+    </div>
+
+    <!-- New/Backlog mode options -->
+    <div class="mode-opts" id="opts-new" hidden>
+      <label>
+        Count as "unplayed" if under
+        <input type="number" id="max-new-minutes" value="60" min="0" max="600" step="15" style="margin:0 4px;">
+        minutes played
+      </label>
+    </div>
+
     <div class="prefs-row">
       <div style="flex:1;min-width:200px;">
         <label>What are you in the mood for? <small>(optional)</small></label>
@@ -545,6 +630,7 @@
     </div>
 
     <div id="rec-output">
+      <div id="rec-status-line" class="rec-status" hidden></div>
       <div id="rec-content"></div>
       <span class="streaming-cursor" id="rec-cursor" hidden></span>
     </div>
@@ -909,50 +995,86 @@ function sortLibrary() {
   renderLibraryTable(sorted);
 }
 
+// ── Mode tabs ──────────────────────────────────────────────────────────────────
+let activeMode = 'library';
+
+function setMode(mode) {
+  activeMode = mode;
+  document.querySelectorAll('.mode-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.mode === mode);
+  });
+  document.getElementById('opts-sales').hidden = (mode !== 'sales');
+  document.getElementById('opts-new').hidden   = (mode !== 'new');
+}
+
 // ── Recommendations ────────────────────────────────────────────────────────────
 function getRecommendations() {
-  const prefs = encodeURIComponent(document.getElementById('preferences').value.trim());
-  const count = parseInt(document.getElementById('rec-count').value) || 5;
+  const prefs       = encodeURIComponent(document.getElementById('preferences').value.trim());
+  const count       = parseInt(document.getElementById('rec-count').value) || 5;
+  const minDiscount = parseInt(document.getElementById('min-discount').value) || 40;
+  const wishlist    = document.getElementById('include-wishlist').checked;
+  const maxNewMin   = parseInt(document.getElementById('max-new-minutes').value) || 60;
 
-  const output = document.getElementById('rec-output');
-  const content = document.getElementById('rec-content');
-  const cursor = document.getElementById('rec-cursor');
-  const btn = document.getElementById('rec-btn');
+  const output     = document.getElementById('rec-output');
+  const content    = document.getElementById('rec-content');
+  const cursor     = document.getElementById('rec-cursor');
+  const statusLine = document.getElementById('rec-status-line');
+  const btn        = document.getElementById('rec-btn');
 
   output.classList.add('visible');
   content.innerHTML = '';
+  statusLine.hidden = true;
+  statusLine.innerHTML = '';
   cursor.removeAttribute('hidden');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Asking Claude…';
+  btn.innerHTML = '<span class="spinner"></span> Working…';
+
+  const params = new URLSearchParams({
+    mode:             activeMode,
+    preferences:      document.getElementById('preferences').value.trim(),
+    count,
+    min_discount:     minDiscount,
+    include_wishlist: wishlist,
+    max_new_minutes:  maxNewMin,
+  });
 
   let rawText = '';
-  const url = `/api/recommend?preferences=${prefs}&count=${count}`;
-  const es = new EventSource(url);
+  const es = new EventSource(`/api/recommend?${params}`);
 
   es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
+
     if (msg.done) {
       es.close();
       cursor.setAttribute('hidden', '');
+      statusLine.hidden = true;
       btn.disabled = false;
       btn.innerHTML = '✨ Recommend';
-      // Final render with full markdown
       content.innerHTML = marked.parse(rawText);
       return;
     }
+
     if (msg.error) {
       es.close();
       cursor.setAttribute('hidden', '');
+      statusLine.hidden = true;
       btn.disabled = false;
       btn.innerHTML = '✨ Recommend';
       content.innerHTML = `<div class="notice error visible">Error: ${escHtml(msg.error)}</div>`;
       return;
     }
+
+    if (msg.type === 'status') {
+      statusLine.innerHTML = `<span class="spinner"></span>${escHtml(msg.msg)}`;
+      statusLine.hidden = false;
+      return;
+    }
+
     if (msg.text) {
+      // First text chunk — hide status line, show content
+      if (!rawText) statusLine.hidden = true;
       rawText += msg.text;
-      // Live render during streaming — use marked for progressive display
       content.innerHTML = marked.parse(rawText);
-      // Scroll to bottom
       output.scrollTop = output.scrollHeight;
     }
   };
@@ -960,6 +1082,7 @@ function getRecommendations() {
   es.onerror = () => {
     es.close();
     cursor.setAttribute('hidden', '');
+    statusLine.hidden = true;
     btn.disabled = false;
     btn.innerHTML = '✨ Recommend';
     if (!rawText) {

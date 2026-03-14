@@ -348,8 +348,14 @@ def _enrich_with_rawg(games: list[dict], api_key: str) -> list[dict]:
 # ── Recommendations (SSE) ──────────────────────────────────────────────────────
 @app.get("/api/recommend")
 async def recommend(
+    mode: str = "library",          # "library" | "sales" | "new"
     preferences: str = "",
     count: int = 5,
+    # sales mode options
+    min_discount: int = 40,
+    include_wishlist: bool = True,
+    # new-game mode options
+    max_new_minutes: int = 60,
     session_id: str | None = Cookie(default=None),
 ):
     _, session = _get_session(session_id)
@@ -357,23 +363,68 @@ async def recommend(
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if not anthropic_key:
         raise HTTPException(400, "ANTHROPIC_API_KEY not configured on the server")
-
-    # Get library from session cache (client should have called /api/library first)
-    # We re-fetch here so the SSE endpoint is self-contained
     if not session:
         raise HTTPException(400, "No platforms connected")
-
-    # Fetch library synchronously (in thread) before streaming starts
-    library_resp = await get_library(skip_ratings=False, session_id=session_id)
-    games_raw = library_resp["games"]
-
-    if not games_raw:
-        raise HTTPException(400, "Library is empty")
-
-    # Build prompt
-    prompt = _build_prompt(games_raw, preferences, count)
+    if mode not in ("library", "sales", "new"):
+        raise HTTPException(400, f"Unknown mode: {mode}")
 
     async def event_stream():
+        def status(msg: str):
+            return f'data: {json.dumps({"type": "status", "msg": msg})}\n\n'
+
+        # ── Fetch library (all modes need it for context) ──────────────────
+        yield status("Loading your library…")
+        try:
+            library_resp = await get_library(skip_ratings=True, session_id=session_id)
+            games_raw = library_resp["games"]
+        except Exception as e:
+            yield f'data: {json.dumps({"error": str(e)})}\n\n'
+            return
+        if not games_raw:
+            yield f'data: {json.dumps({"error": "Library is empty"})}\n\n'
+            return
+
+        # ── Mode-specific data fetching ────────────────────────────────────
+        if mode == "sales":
+            yield status("Fetching Steam featured deals…")
+            steam_creds = session.get("steam", {})
+            owned_ids = {g["app_id"] for g in games_raw if g.get("app_id")}
+
+            if include_wishlist and steam_creds:
+                yield status(
+                    f"Checking your wishlist for discounts — up to 100 items, ~20 sec…"
+                )
+
+            try:
+                sale_games = await asyncio.to_thread(
+                    _fetch_sales,
+                    min_discount,
+                    steam_creds,
+                    include_wishlist,
+                    owned_ids,
+                )
+            except Exception as e:
+                yield f'data: {json.dumps({"error": f"Sales fetch failed: {e}"})}\n\n'
+                return
+
+            if not sale_games:
+                yield f'data: {json.dumps({"error": "No sales found above the discount threshold. Try lowering it."})}\n\n'
+                return
+
+            prompt = _build_sales_prompt(games_raw, sale_games, preferences, count)
+
+        elif mode == "new":
+            unplayed = [g for g in games_raw if g["playtime_minutes"] <= max_new_minutes]
+            if not unplayed:
+                yield f'data: {json.dumps({"error": "No unplayed games found in your library."})}\n\n'
+                return
+            prompt = _build_new_game_prompt(games_raw, unplayed, preferences, count)
+
+        else:  # library
+            prompt = _build_library_prompt(games_raw, preferences, count)
+
+        # ── Stream Claude ──────────────────────────────────────────────────
+        yield status("Asking Claude…")
         client = anthropic.AsyncAnthropic(api_key=anthropic_key)
         try:
             async with client.messages.stream(
@@ -383,8 +434,7 @@ async def recommend(
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 async for text in stream.text_stream:
-                    payload = json.dumps({"text": text})
-                    yield f"data: {payload}\n\n"
+                    yield f'data: {json.dumps({"text": text})}\n\n'
             yield 'data: {"done": true}\n\n'
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
@@ -394,6 +444,131 @@ async def recommend(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _fetch_sales(
+    min_discount: int,
+    steam_creds: dict,
+    include_wishlist: bool,
+    owned_ids: set[str],
+) -> list:
+    from game_recommender.steam_sales import get_all_sales
+    return get_all_sales(
+        min_discount=min_discount,
+        steam_api_key=steam_creds.get("api_key"),
+        steam_user_id=steam_creds.get("user_id"),
+        include_wishlist=include_wishlist,
+        owned_app_ids=owned_ids,
+    )
+
+
+def _build_library_prompt(games: list[dict], preferences: str, count: int) -> str:
+    return _build_prompt(games, preferences, count)
+
+
+def _build_sales_prompt(
+    games: list[dict],
+    sale_games: list,
+    preferences: str,
+    count: int,
+) -> str:
+    """Prompt asking Claude to pick the best current Steam deals for this player."""
+
+    def _game_line(g: dict) -> str:
+        line = f"- {g['name']} ({g['platform'].upper()})"
+        if g["playtime_minutes"] > 0:
+            line += f" | {round(g['playtime_minutes'] / 60, 1)}h played"
+        if g.get("genres"):
+            line += f" | {', '.join(g['genres'][:3])}"
+        return line
+
+    def _sale_line(s) -> str:
+        tag = "⭐ WISHLIST" if s.from_wishlist else "🛒 FEATURED"
+        line = (
+            f"{tag}: {s.name} | {s.discount_percent}% OFF → {s.sale_price}"
+            f" (was {s.original_price})"
+        )
+        if s.genres:
+            line += f" | {', '.join(s.genres[:3])}"
+        return line
+
+    library_lines = "\n".join(_game_line(g) for g in games[:80])
+    sale_lines    = "\n".join(_sale_line(s) for s in sale_games[:50])
+    prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
+
+    return f"""You are a gaming deal advisor. Your job is to identify which current Steam sale games best match a player's taste.
+
+**PLAYER'S LIBRARY (taste profile):**
+{library_lines}
+{prefs_section}
+
+**CURRENT STEAM DEALS (not yet owned):**
+{sale_lines}
+
+From the deals listed above, recommend exactly {count} games this player should buy. Wishlist items are already ones they want — prioritise them if they match.
+
+For each recommendation:
+
+1. **Game Name** — *XX% off → $Y.YY (was $Z.ZZ)*
+   - **Why it fits:** 2–3 sentences connecting it to their library history
+   - **Genre match:** Which games they've played it's most similar to
+   - **Deal quality:** Is this a historically good discount or just okay?
+
+End with a one-sentence verdict on whether this is a great sale or a "wait for a better deal" situation.
+
+Only recommend games from the deals list above."""
+
+
+def _build_new_game_prompt(
+    games: list[dict],
+    unplayed: list[dict],
+    preferences: str,
+    count: int,
+) -> str:
+    """Prompt asking Claude which unplayed library games to try first."""
+
+    def _played_line(g: dict) -> str:
+        line = f"- {g['name']} | {round(g['playtime_minutes'] / 60, 1)}h"
+        if g.get("genres"):
+            line += f" | {', '.join(g['genres'][:3])}"
+        return line
+
+    def _unplayed_line(g: dict) -> str:
+        mins = g["playtime_minutes"]
+        playtime = f"{mins}min" if mins else "0 min"
+        line = f"- {g['name']} ({g['platform'].upper()}) | {playtime}"
+        if g.get("rawg_rating"):
+            line += f" | RAWG {g['rawg_rating']:.1f}/5"
+        if g.get("genres"):
+            line += f" | {', '.join(g['genres'][:3])}"
+        return line
+
+    played = [g for g in games if g["playtime_minutes"] > 60]
+    played_lines   = "\n".join(_played_line(g) for g in played[:60])
+    unplayed_lines = "\n".join(_unplayed_line(g) for g in unplayed[:80])
+    prefs_section  = f"\n\n**Player's current mood:** {preferences}" if preferences else ""
+
+    return f"""You are a gaming advisor helping a player explore their backlog.
+
+**GAMES THEY'VE PLAYED (their taste profile):**
+{played_lines}
+{prefs_section}
+
+**UNPLAYED GAMES IN THEIR LIBRARY:**
+{unplayed_lines}
+
+Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.
+
+For each recommendation:
+
+1. **Game Name** (Platform)
+   - **Why start now:** 2–3 sentences connecting it to games they already love
+   - **What to expect:** Tone, pacing, length — so they can set expectations
+   - **Best entry point:** Any tip for the first 30 minutes to hook them
+
+End with a sentence about the hidden gem in the list — the one they'd least expect to love but probably will.
+
+Only recommend games from the unplayed list above."""
 
 
 def _build_prompt(games: list[dict], preferences: str, count: int) -> str:
