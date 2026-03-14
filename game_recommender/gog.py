@@ -30,7 +30,7 @@ _CLIENT_SECRET = "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46
 _REDIRECT_URI  = "https://embed.gog.com/on_login_success?origin=client"
 
 # ── GOG API endpoints ─────────────────────────────────────────────────────────
-_TOKEN_URL    = "https://auth.gog.com/token"
+_TOKEN_URL    = "https://login.gog.com/token"
 _PRODUCTS_URL = "https://embed.gog.com/account/getFilteredProducts"
 
 # Full GOG login URL — open this in a browser; after login GOG redirects to
