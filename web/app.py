@@ -11,17 +11,39 @@ import json
 import asyncio
 import os
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import anthropic
 import httpx
 from fastapi import FastAPI, Request, Response, HTTPException, Cookie
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI(title="Game Recommender")
+
+# Whether to set Secure on cookies — true in production (HTTPS), false for localhost dev.
+_COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
+
+
+# ── Security headers ────────────────────────────────────────────────────────────
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Narrow CSP: scripts only from self + the CDN used for marked.js and DOMPurify
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self';"
+    )
+    return response
+
 
 # ── Session store ──────────────────────────────────────────────────────────────
 # Simple in-memory store: session_id -> {platform: credentials}
@@ -38,7 +60,14 @@ def _get_session(session_id: str | None) -> tuple[str, dict]:
 
 
 def _set_session_cookie(response: Response, session_id: str) -> None:
-    response.set_cookie("session_id", session_id, httponly=True, samesite="lax")
+    response.set_cookie(
+        "session_id",
+        session_id,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite="strict",
+        max_age=60 * 60 * 8,  # 8 hours
+    )
 
 
 # ── HTML page ──────────────────────────────────────────────────────────────────
@@ -84,17 +113,17 @@ async def epic_auth_callback(
     """Receive the authorization code from Epic, exchange it, and redirect home."""
     if error or not code:
         reason = error_description or error or "login_cancelled"
-        return RedirectResponse(f"/?auth_error={reason}")
+        return RedirectResponse(f"/?auth_error={quote_plus(reason)}")
 
     from game_recommender.epic import exchange_code
     try:
         tokens = await asyncio.to_thread(exchange_code, code)
     except Exception as e:
-        return RedirectResponse(f"/?auth_error={str(e)[:80]}")
+        return RedirectResponse(f"/?auth_error={quote_plus(str(e)[:120])}")
 
     if "access_token" not in tokens:
         msg = tokens.get("errorMessage", "token_exchange_failed")
-        return RedirectResponse(f"/?auth_error={msg[:80]}")
+        return RedirectResponse(f"/?auth_error={quote_plus(msg[:120])}")
 
     sid, session = _get_session(session_id)
     session["epic"] = {
@@ -367,6 +396,9 @@ async def recommend(
         raise HTTPException(400, "No platforms connected")
     if mode not in ("library", "sales", "new"):
         raise HTTPException(400, f"Unknown mode: {mode}")
+    if len(preferences) > 500:
+        raise HTTPException(400, "preferences must be 500 characters or fewer")
+    count = max(1, min(count, 10))
 
     async def event_stream():
         def status(msg: str):

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Game Recommender</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 <style>
   /* ── Variables ── */
   :root {
@@ -615,8 +616,8 @@
 
     <div class="prefs-row">
       <div style="flex:1;min-width:200px;">
-        <label>What are you in the mood for? <small>(optional)</small></label>
-        <textarea id="preferences" placeholder="e.g. something relaxing I can finish in a weekend, or a long RPG to sink into…"></textarea>
+        <label>What are you in the mood for? <small>(optional — max 500 chars)</small></label>
+        <textarea id="preferences" maxlength="500" placeholder="e.g. something relaxing I can finish in a weekend, or a long RPG to sink into…"></textarea>
       </div>
       <div class="prefs-right">
         <div class="count-row">
@@ -1050,7 +1051,7 @@ function getRecommendations() {
       statusLine.hidden = true;
       btn.disabled = false;
       btn.innerHTML = '✨ Recommend';
-      content.innerHTML = marked.parse(rawText);
+      content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
       return;
     }
 
@@ -1074,7 +1075,7 @@ function getRecommendations() {
       // First text chunk — hide status line, show content
       if (!rawText) statusLine.hidden = true;
       rawText += msg.text;
-      content.innerHTML = marked.parse(rawText);
+      content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
       output.scrollTop = output.scrollHeight;
     }
   };
