@@ -889,6 +889,7 @@ async def recommend(
                     "sale":     g.sale_price,
                     "original": g.original_price,
                     "wishlist": g.from_wishlist,
+                    "url":      g.store_url,
                 }
                 for g in sale_games
             ]

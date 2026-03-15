@@ -377,6 +377,9 @@
   #deals-table-wrap .col-sale    { font-weight: 600; }
   #deals-table-wrap .col-orig    { color: var(--muted); text-decoration: line-through; }
   #deals-table-wrap .wishlist-star { color: gold; }
+  #deals-table-wrap .col-link { text-align: right; white-space: nowrap; }
+  #deals-table-wrap .buy-link { font-size: 0.8rem; color: var(--accent2); text-decoration: none; opacity: 0.75; }
+  #deals-table-wrap .buy-link:hover { opacity: 1; text-decoration: underline; }
   #deals-table-wrap th.sortable { cursor: pointer; user-select: none; }
   #deals-table-wrap th.sortable:hover { color: var(--fg, #eee); background: var(--bg3, #2a2a3a); }
   #deals-table-wrap th.sort-asc::after  { content: ' ↑'; opacity: 0.7; }
@@ -1437,7 +1440,11 @@ function getRecommendations() {
       if (va > vb) return dealsSortAsc ?  1 : -1;
       return 0;
     });
-    const rows = sorted.map(d => `
+    const rows = sorted.map(d => {
+      const link = d.url
+        ? `<a class="buy-link" href="${escHtml(d.url)}" target="_blank" rel="noopener noreferrer">Buy →</a>`
+        : '';
+      return `
       <tr>
         <td>${d.wishlist ? '<span class="wishlist-star" title="On your wishlist">★</span>' : ''}</td>
         <td>${escHtml(d.name)}</td>
@@ -1445,7 +1452,9 @@ function getRecommendations() {
         <td class="col-discount">${d.discount}%</td>
         <td class="col-sale">${escHtml(d.sale)}</td>
         <td class="col-orig">${escHtml(d.original)}</td>
-      </tr>`).join('');
+        <td class="col-link">${link}</td>
+      </tr>`;
+    }).join('');
     const tbody = dealsWrap.querySelector('tbody');
     if (tbody) tbody.innerHTML = rows;
     dealsWrap.querySelectorAll('th.sortable').forEach(th => {
@@ -1530,6 +1539,7 @@ function getRecommendations() {
                 <th class="sortable" data-col="discount">Discount</th>
                 <th class="sortable" data-col="sale">Sale Price</th>
                 <th class="sortable" data-col="original">Original</th>
+                <th></th>
               </tr></thead>
               <tbody></tbody>
             </table>

@@ -80,6 +80,7 @@ def get_gog_catalog_deals(min_discount: int = 40, page_size: int = 48) -> list[S
                 final_cents = round(float(price.get("finalAmount", 0)) * 100)
             except (TypeError, ValueError):
                 continue
+            slug = product.get("slug", "")
             games.append(SaleGame(
                 name=product.get("title", ""),
                 app_id=str(product.get("id", "")),
@@ -87,6 +88,7 @@ def get_gog_catalog_deals(min_discount: int = 40, page_size: int = 48) -> list[S
                 original_price_cents=base_cents,
                 sale_price_cents=final_cents,
                 store="GOG",
+                store_url=f"https://www.gog.com/game/{slug}" if slug else "https://www.gog.com/games/discounted",
             ))
 
         if len(products) < page_size:
@@ -146,13 +148,15 @@ def get_cheapshark_deals(
                     continue
                 normal_cents = round(float(deal.get("normalPrice", 0)) * 100)
                 sale_cents   = round(float(deal.get("salePrice",   0)) * 100)
+                deal_id = deal.get("dealID", "")
                 games.append(SaleGame(
                     name=deal.get("title", ""),
-                    app_id=deal.get("dealID", ""),
+                    app_id=deal_id,
                     discount_percent=round(savings),
                     original_price_cents=normal_cents,
                     sale_price_cents=sale_cents,
                     store=store_name,
+                    store_url=f"https://www.cheapshark.com/redirect?dealID={deal_id}" if deal_id else "",
                 ))
 
             # If the page wasn't full there are no more pages to fetch
@@ -206,6 +210,7 @@ def get_epic_free_games() -> list[SaleGame]:
         # originalPrice is in the store's minor currency unit (cents for USD)
         original_cents = price_info.get("originalPrice", 0)
 
+        slug = item.get("productSlug") or item.get("urlSlug") or ""
         games.append(SaleGame(
             name=item.get("title", ""),
             app_id=item.get("id", ""),
@@ -213,6 +218,7 @@ def get_epic_free_games() -> list[SaleGame]:
             original_price_cents=original_cents,
             sale_price_cents=0,
             store="Epic Games Store",
+            store_url=f"https://store.epicgames.com/p/{slug}" if slug else "https://store.epicgames.com/en-US/free-games",
         ))
 
     return games

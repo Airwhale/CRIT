@@ -32,6 +32,7 @@ class SaleGame:
     store: str = "Steam"         # Which store this deal is from
     from_wishlist: bool = False  # True if this game was found in the user's Steam wishlist
     genres: list[str] = field(default_factory=list)  # e.g. ["Action", "RPG"]
+    store_url: str = ""          # Direct link to the game's store page (empty = unknown)
 
     @property
     def original_price(self) -> str:
@@ -92,6 +93,7 @@ def get_featured_specials(min_discount: int = 40) -> list[SaleGame]:
             discount_percent=discount,
             original_price_cents=item.get("original_price", 0),  # Field name in featured API
             sale_price_cents=item.get("final_price", 0),          # Field name in featured API
+            store_url=f"https://store.steampowered.com/app/{app_id}",
             # genres not available from the featured endpoint; stays as empty list
         ))
 
@@ -204,6 +206,7 @@ def get_wishlist_on_sale(
                     sale_price_cents=price.get("final", 0),         # Field name in appdetails API
                     from_wishlist=True,  # Always True for items from this function
                     genres=[g["description"] for g in info.get("genres", [])],
+                    store_url=f"https://store.steampowered.com/app/{app_id}",
                 ))
         except Exception:
             # A failed batch is non-fatal — we skip it and continue checking
