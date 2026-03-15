@@ -966,9 +966,8 @@ def _build_sales_prompt(
             line += f" | {', '.join(s.genres[:3])}"
         return line
 
-    # Cap both sections to keep prompt length manageable
-    library_lines = "\n".join(_game_line(g) for g in games[:80])
-    sale_lines    = "\n".join(_sale_line(s) for s in sale_games[:50])
+    library_lines = "\n".join(_game_line(g) for g in games)
+    sale_lines    = "\n".join(_sale_line(s) for s in sale_games)
     prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
 
     if count > 10:
@@ -1039,8 +1038,8 @@ def _build_new_game_prompt(
 
     # Only games with >60 minutes played are a meaningful taste signal
     played = [g for g in games if g["playtime_minutes"] > 60]
-    played_lines   = "\n".join(_played_line(g) for g in played[:60])
-    unplayed_lines = "\n".join(_unplayed_line(g) for g in unplayed[:80])
+    played_lines   = "\n".join(_played_line(g) for g in played)
+    unplayed_lines = "\n".join(_unplayed_line(g) for g in unplayed)
     prefs_section  = f"\n\n**Player's current mood:** {preferences}" if preferences else ""
 
     if count > 10:
@@ -1079,12 +1078,12 @@ Only recommend games from the unplayed list above."""
 def _build_prompt(games: list[dict], preferences: str, count: int) -> str:
     """Build the default library recommendation prompt.
 
-    Formats up to 100 games with playtime and any available rating data,
+    Formats all games with playtime and any available rating data,
     then asks Claude for exactly `count` recommendations with a structured
     format for each (Why now / Ratings / Best for / Similar to).
     """
     lines = []
-    for g in games[:100]:  # Cap at 100 to keep the prompt within context limits
+    for g in games:
         line = f"- {g['name']} ({g['platform'].upper()})"
         if g["playtime_minutes"] > 0:
             hours = round(g["playtime_minutes"] / 60, 1)
@@ -1140,7 +1139,7 @@ def _build_discover_prompt(games: list[dict], preferences: str, count: int) -> s
     recommend anything in its knowledge base, with no constraint to owned games.
     """
     lines = []
-    for g in games[:100]:
+    for g in games:
         line = f"- {g['name']} ({g['platform'].upper()})"
         if g["playtime_minutes"] > 0:
             line += f" | {round(g['playtime_minutes'] / 60, 1)}h played"
