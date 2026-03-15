@@ -143,7 +143,7 @@ def get_gog_library(access_token: str) -> list[Game]:
         resp.raise_for_status()
         data = resp.json()
 
-        for product in data.get("products", []):
+        for product in (data.get("products") or []):
             # GOG sometimes has null titles for add-ons or beta entries —
             # coerce None to empty string so .strip() always works
             title = (product.get("title") or "").strip()

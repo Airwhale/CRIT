@@ -1,6 +1,10 @@
 # CRIT — Curated Recommendations In Titles
 
-An AI-powered game recommendation web app. Connect your Steam, Epic Games, and GOG libraries, then let Claude analyse your play history and recommend what to play next — or find great deals in the current Steam sale that actually match your taste.
+CRIT is a self-hosted web app that turns your game library into personalised recommendations powered by Claude. Connect your Steam, Epic Games, and GOG accounts and CRIT builds a unified view of everything you own — complete with playtime history, RAWG ratings, Metacritic scores, genres, and release years. From that picture it calls Claude to reason about your taste and suggest what to play next, what deals are worth buying in the current Steam sale, or which unplayed games in your backlog deserve a second look.
+
+The recommendations stream back word-by-word as Claude writes them, so you get a running narrative rather than a static list. Claude explains *why* each pick fits your history, what makes it stand out, and where to get it — making the output feel less like a search result and more like advice from someone who has read your whole play history.
+
+All credentials stay in server memory and are never written to disk. Restarting the server clears everything. This makes CRIT safe to run on a home server or a trusted network without worrying about stored secrets.
 
 ---
 
@@ -9,9 +13,12 @@ An AI-powered game recommendation web app. Connect your Steam, Epic Games, and G
 - **From Library** — recommends games you already own based on playtime patterns and genre taste
 - **Steam Deals** — scans current Steam sales (and optionally your wishlist) and picks deals that fit your history
 - **Backlog** — recommends unplayed or barely-touched games already sitting in your library
+- **Discover** — recommends games you don't own yet, drawn from Claude's broad knowledge of the medium
+- Unified library table merging Steam, Epic, and GOG with sortable, toggleable columns
 - Live-streaming Claude responses with a blinking cursor as text arrives
-- RAWG and Metacritic ratings fetched and passed to Claude for context
-- Supports Steam (API key), Epic Games (OAuth), and GOG (OAuth)
+- RAWG ratings, Metacritic scores, genres, tags, and release years fetched and passed to Claude for context
+- CSV export and import so you can back up or load your library without re-fetching
+- Supports Steam (OpenID login or API key), Epic Games (OAuth), and GOG (OAuth)
 
 ---
 
@@ -97,7 +104,7 @@ The test suite covers every module with both success and failure scenarios, plus
 python -m pytest tests/ -v
 ```
 
-Expected output: **162 tests, 0 failures.**
+Expected output: **170 tests, 0 failures.**
 
 ### Test layout
 
@@ -105,11 +112,11 @@ Expected output: **162 tests, 0 failures.**
 tests/
 ├── conftest.py          — shared fixtures: fake Claude stream, FAKE_GAMES, SSE parser
 ├── test_steam.py        — Steam library fetch (20 tests)
-├── test_epic.py         — Epic OAuth + library (20 tests)
-├── test_gog.py          — GOG OAuth + library (19 tests)
+├── test_epic.py         — Epic OAuth + library (21 tests)
+├── test_gog.py          — GOG OAuth + library (25 tests)
 ├── test_ratings.py      — RAWG ratings + enrich_games (22 tests)
 ├── test_steam_sales.py  — featured specials, wishlist, get_all_sales (33 tests)
-└── test_web_api.py      — FastAPI endpoints end-to-end (46 tests)
+└── test_web_api.py      — FastAPI endpoints end-to-end (47 tests)
 ```
 
 ### What's covered
@@ -117,11 +124,11 @@ tests/
 | Module | Success paths | Failure paths | Corner cases |
 |---|---|---|---|
 | Steam | Sorted results, field mapping, fallback names, `last_played=0→None`, env-var creds | Missing/empty key or ID, private profile, HTTP 401/403, timeout, connection error | Equal-playtime sort stability, `name=""` passthrough, very large playtime, `playtime_hours` rounding |
-| Epic | Token exchange & refresh, single/paginated library, dedup, 32-char ID skip, title fallbacks | Bad auth code, expired refresh token, HTTP error on library | Empty-string cursor stops pagination, 31-char alphanumeric not filtered, cross-page dedup, `records: null` crash path |
-| GOG | Token exchange & refresh, single/paginated library, alphabetical sort, blank-title skip | Bad code, expired token, HTTP / network error | `totalPages=0` makes one request, `title: null` skipped, `products: null` crash path, `id=0` stored as `"0"` |
+| Epic | Token exchange & refresh (with and without `redirect_uri`), single/paginated library, dedup, 32-char ID skip, `release_year` from ISO date | Bad auth code, expired refresh token, HTTP error on library | Empty-string cursor stops pagination, 31-char alphanumeric not filtered, cross-page dedup, `records: null` returns empty list |
+| GOG | Token exchange & refresh, single/paginated library, alphabetical sort, blank-title skip, `release_year` from unix timestamp, `gog_rating` from community score | Bad code, expired token, HTTP / network error | `totalPages=0` makes one request, `title: null` skipped, `products: null` returns empty list, `id=0` stored as `"0"`, zero rating → `None`, missing date → `None` |
 | Ratings | Full `GameRating` fields, `None` on no results, case-insensitive cache, tags capped at 10, progress callback | Missing API key, HTTP error, network error | Minimal result (sparse fields), <10 tags all returned, `delay=0` valid, per-name cache isolation |
 | Steam sales | Discount filter, sort, price formatting, wishlist date ordering, `max_check` cap, `get_all_sales` merge / wishlist-first / dedup / owned-game filter | HTTP errors, failed appdetails batch skipped, featured/wishlist errors handled gracefully | `discount == min_discount` included (strict `<`), `min_discount=0`, price `0` → `"unknown"`/`"free"`, `id=0` kept, wishlist version wins dedup, `owned_app_ids=None` |
-| Web API | HTML + security headers, Steam auth + cookie + game_count, platform status, disconnect, library, SSE streaming all three modes, `count` clamping | Missing fields (400), whitespace-only credentials (400), private Steam profile (400), no session, no API key, invalid mode, preferences too long, empty library, Claude exception | Whitespace credentials stripped → 400, `count=0` clamped to 1, `preferences` exactly 500 chars accepted, quotes/newlines in SSE text survive round-trip, `playtime == max_new_minutes` is unplayed, `playtime == 61` at threshold is played, `rawg_limit` query param caps enrichment, RAWG failure returns unenriched games, partial platform failure returns surviving platform, session persists across calls |
+| Web API | HTML + security headers, Steam auth + cookie + game_count, platform status, disconnect, library, SSE streaming all three modes, `count` clamping, full response field schema | Missing fields (400), whitespace-only credentials (400), private Steam profile (400), no session, no API key, invalid mode, preferences too long, empty library, Claude exception | Whitespace credentials stripped → 400, `count=0` clamped to 1, `preferences` exactly 500 chars accepted, quotes/newlines in SSE text survive round-trip, `playtime == max_new_minutes` is unplayed, `playtime == 61` at threshold is played, `rawg_limit` query param caps enrichment, RAWG failure returns unenriched games, partial platform failure returns surviving platform, session persists across calls |
 
 ---
 
@@ -173,12 +180,14 @@ You can connect via OpenID first (no API key) and then add an API key later usin
 
 ### Epic Games
 
-Epic's client ID used here (`34a02cf8f4414e29b15921876da36f9a`) is the public launcher client, which does not support custom redirect URIs. Connection requires a one-time manual copy-paste:
+Connection uses a one-time manual code paste:
 
 1. In the web UI, click the Epic page link shown in the Connect panel
 2. Log in to Epic if prompted — the page returns a JSON object
 3. Copy the value of `authorizationCode` from the JSON
 4. Paste it into the input field and click **Connect**
+
+> The public launcher client ID (`34a02cf8f4414e29b15921876da36f9a`) only allows `localhost` as a redirect URI, so the OAuth redirect flow is not shown in the UI for non-localhost deployments. The manual paste above works on any host.
 
 ### GOG
 

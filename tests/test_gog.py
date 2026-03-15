@@ -215,16 +215,16 @@ class TestGetGogLibraryCornerCases:
         assert len(games) == 1
         assert games[0].name == "Real Game"
 
-    def test_products_null_raises_type_error(self):
-        """products: null → `for product in None:` raises TypeError.
+    def test_products_null_returns_empty_list(self):
+        """products: null is treated as an empty page — the function returns [] gracefully.
 
-        This documents an unhandled crash path — if GOG returns null for products,
-        the function will raise rather than returning empty.
+        `data.get("products", [])` returns None when the key exists with a null value
+        (the default only applies when the key is absent). Using `or []` handles this.
         """
         resp = _get_resp({"products": None, "totalPages": 1})
         with patch("game_recommender.gog.requests.get", return_value=resp):
-            with pytest.raises(TypeError):
-                get_gog_library("tok")
+            games = get_gog_library("tok")
+        assert games == []
 
     def test_product_id_zero_stored_as_string_zero(self):
         """id: 0 is a valid (if unusual) app_id. str(0) == '0', which is non-empty."""
@@ -252,3 +252,59 @@ class TestGetGogLibraryCornerCases:
 
         assert len(games) == 1
         assert mock_get.call_count == 1  # Exactly one request, not two
+
+
+# ── release_year and gog_rating fields ────────────────────────────────────────
+
+class TestGogLibraryNewFields:
+
+    def test_release_year_parsed_from_unix_timestamp(self):
+        """releaseDate unix timestamp is converted to a release year integer."""
+        import calendar, datetime
+        # 2019-01-15 00:00:00 UTC → year 2019
+        ts = int(calendar.timegm(datetime.date(2019, 1, 15).timetuple()))
+        resp = _products_resp([{"id": 1, "title": "Old Game", "releaseDate": ts}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].release_year == 2019
+
+    def test_release_year_zero_gives_none(self):
+        """releaseDate=0 (GOG's sentinel for 'no date') should produce release_year=None."""
+        resp = _products_resp([{"id": 1, "title": "Undated", "releaseDate": 0}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].release_year is None
+
+    def test_release_year_missing_gives_none(self):
+        """When releaseDate key is absent, release_year should be None."""
+        resp = _products_resp([{"id": 1, "title": "No Date Game"}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].release_year is None
+
+    def test_gog_rating_parsed_from_numeric(self):
+        """A non-zero rating value is stored as a float."""
+        resp = _products_resp([{"id": 1, "title": "Rated Game", "rating": 42}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].gog_rating == pytest.approx(42.0)
+
+    def test_gog_rating_zero_gives_none(self):
+        """rating=0 means unrated on GOG; should produce gog_rating=None, not 0.0."""
+        resp = _products_resp([{"id": 1, "title": "Unrated", "rating": 0}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].gog_rating is None
+
+    def test_gog_rating_missing_gives_none(self):
+        """When rating key is absent, gog_rating should be None."""
+        resp = _products_resp([{"id": 1, "title": "No Rating Game"}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].gog_rating is None

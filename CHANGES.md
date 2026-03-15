@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+### release_year, gog_rating, and tags fields
+
+Game objects and library API responses now carry three additional fields from platform data and RAWG:
+
+- **`release_year`** (`int | None | "~"`) — release year parsed from Epic's ISO date strings, GOG's unix timestamps, or filled in from RAWG. Steam's XML/Web API does not provide release dates, so Steam games start with the sentinel value `"~"` and are filled by RAWG when found. `None` means RAWG found the game but has no date.
+- **`gog_rating`** (`float | None | "~"`) — GOG community rating (out of 100). Non-GOG games carry `"~"` (not applicable). A rating of 0 on GOG means unrated and is stored as `None`.
+- **`tags`** — RAWG tag list (up to 10), passed to Claude for additional genre context.
+
+The sentinel `"~"` renders as `–` in the UI (platform does not have this field), while `None` renders as `○` (platform has the field type but no data for this specific game).
+
+#### `game_recommender/models.py`
+- Added `release_year: Optional[int] = None` and `gog_rating: Optional[float] = None` to the `Game` dataclass.
+
+#### `game_recommender/epic.py`
+- `get_epic_library` now extracts `release_year` from `metadata.releaseDate` (ISO 8601 string).
+
+#### `game_recommender/gog.py`
+- `get_gog_library` now extracts `release_year` from `releaseDate` (unix timestamp) and `gog_rating` from `rating`. Zero/missing values are stored as `None`.
+
+#### `web/app.py`
+- `_game_to_dict` now includes `release_year`, `gog_rating`, and `tags` fields with correct sentinel values per platform.
+- `_enrich_with_rawg` fills `release_year` from RAWG when the platform didn't supply one, and populates `tags`.
+
+---
+
+### Dynamic column picker for the library table
+
+The library table columns are now user-configurable without any page reload or data re-fetch.
+
+#### `web/templates/index.html`
+- Added a **Columns ▾** button in the library toolbar. Clicking it opens a popover with a checkbox for each of the nine columns (Game, Platform, Playtime, Last Played, Year, RAWG, Metacritic, GOG Rating, Genres / Tags). Toggling a checkbox instantly rebuilds the header and all rows.
+- Defined a `COLUMNS` array as the single source of truth for column metadata (key, label, sort key, width). `renderTableHead()` and `renderLibraryTable()` both consume it, so adding or removing a column only requires a change to `COLUMNS`.
+- `visibleCols` (`Set`) tracks which columns are shown. All columns are visible by default.
+- `_updateSortIndicators()` now queries `.sort-ind` elements from the live DOM rather than a hardcoded list, so it works correctly as columns are added and removed.
+- Added **Year** (release year) and **GOG Rating** columns with sort support. Both use sentinel rendering: `–` for `"~"` (not applicable), `○` for `null` (unknown).
+- Renamed **Genres** to **Genres / Tags** — shows up to 2 genres and 1 RAWG tag.
+- Added sort options for Release Year and GOG Rating in the sort dropdown.
+
+---
+
+### CSV export and import
+
+#### `web/templates/index.html`
+- **Export CSV** button downloads `library.csv` with all fields: `name`, `platform`, `app_id`, `playtime_minutes`, `last_played`, `release_year`, `rawg_rating`, `metacritic`, `gog_rating`, `genres` (semicolon-separated), `tags` (semicolon-separated).
+- **Import CSV** button parses the same layout and populates the table without a network round-trip. `"~"` sentinels are preserved through the round-trip. Column detection is header-based so extra or reordered columns are handled gracefully.
+
+---
+
+### Fix three correctness bugs in Epic data fetching
+
+#### `game_recommender/epic.py`
+- **Null records crash:** `data.get("records", [])` returns `None` when the key is present with a null value (the default only applies when the key is absent). Changed to `data.get("records") or []` so a null page is treated as empty rather than crashing with `TypeError`.
+- **Missing `redirect_uri` in OAuth token exchange:** the OAuth redirect flow passes `redirect_uri` to Epic's authorize endpoint but `exchange_code()` never echoed it to the token endpoint, violating RFC 6749 §4.1.3. Added an optional `redirect_uri` parameter to `exchange_code()`.
+
+#### `web/app.py`
+- **`redirect_uri` now passed from OAuth callback:** `epic_auth_callback` constructs the same callback URL used in the authorization request and passes it to `exchange_code()`.
+- **Over-broad exception catch for token refresh:** `_fetch_epic` previously caught all exceptions and attempted a token refresh, masking non-auth errors (network failures, `TypeError`, etc.). Narrowed to `requests.HTTPError` with status 401 only.
+
+---
+
+### Fix null products crash in GOG data fetching
+
+#### `game_recommender/gog.py`
+- Same fix as Epic: `data.get("products", [])` can return `None` when the key exists with a null value. Changed to `(data.get("products") or [])` for graceful empty-page handling.
+
+---
+
 ### Steam — OpenID login and API-key-free library fetch
 
 **Problem:** Connecting Steam previously required both a developer API key and a manually looked-up 64-bit Steam ID, which was a significant barrier for new users.

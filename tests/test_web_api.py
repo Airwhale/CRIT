@@ -326,6 +326,27 @@ class TestLibrary:
         # Verify descending order
         assert playtimes == sorted(playtimes, reverse=True)
 
+    def test_library_response_includes_all_expected_fields(self, client):
+        """Every game dict in the library response must include all expected fields.
+
+        This acts as a schema regression test: adding or removing a field from
+        _game_to_dict() should be caught here so documentation and tests stay in sync.
+        """
+        session_id = "sess-fields"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES):
+            resp = client.get("/api/library?skip_ratings=true", cookies=_cookies(session_id))
+
+        assert resp.status_code == 200
+        expected_fields = {
+            "name", "platform", "app_id", "playtime_minutes", "last_played",
+            "release_year", "rawg_rating", "metacritic", "genres", "tags", "gog_rating",
+        }
+        for game in resp.json()["games"]:
+            missing = expected_fields - game.keys()
+            assert not missing, f"Game '{game.get('name')}' is missing fields: {missing}"
+
 
 # ── GET /api/recommend (SSE) ──────────────────────────────────────────────────
 
@@ -693,9 +714,11 @@ class TestLibraryCornerCases:
         # Use games without pre-set ratings (simulating what _fetch_steam actually returns)
         bare_games = [
             {"name": "Witcher 3", "platform": "steam", "app_id": "1",
-             "playtime_minutes": 100, "rawg_rating": None, "metacritic": None, "genres": []},
+             "playtime_minutes": 100, "last_played": None, "release_year": "~",
+             "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"},
             {"name": "Hades", "platform": "steam", "app_id": "2",
-             "playtime_minutes": 50, "rawg_rating": None, "metacritic": None, "genres": []},
+             "playtime_minutes": 50, "last_played": None, "release_year": "~",
+             "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"},
         ]
         with patch("web.app._fetch_steam", return_value=bare_games), \
              patch("web.app._enrich_with_rawg", side_effect=RuntimeError("RAWG down")):
@@ -721,7 +744,8 @@ class TestLibraryCornerCases:
         }
         epic_games = [
             {"name": "Fortnite", "platform": "epic", "app_id": "fn",
-             "playtime_minutes": 0, "rawg_rating": None, "metacritic": None, "genres": []},
+             "playtime_minutes": 0, "last_played": None, "release_year": None,
+             "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"},
         ]
         with patch("web.app._fetch_steam", side_effect=RuntimeError("profile private")), \
              patch("web.app._fetch_epic", return_value=epic_games):
@@ -748,8 +772,8 @@ class TestLibraryCornerCases:
         # 76 games with playtime 100, 99, 98, … 25 (index 0 highest, 75 lowest)
         games_76 = [
             {"name": f"Game {i:02d}", "platform": "steam", "app_id": str(i),
-             "playtime_minutes": 100 - i,
-             "rawg_rating": None, "metacritic": None, "genres": []}
+             "playtime_minutes": 100 - i, "last_played": None, "release_year": "~",
+             "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"}
             for i in range(76)
         ]
         def fake_enrich(games, api_key):
@@ -778,8 +802,8 @@ class TestLibraryCornerCases:
 
         games_75 = [
             {"name": f"Game {i:02d}", "platform": "steam", "app_id": str(i),
-             "playtime_minutes": 75 - i,
-             "rawg_rating": None, "metacritic": None, "genres": []}
+             "playtime_minutes": 75 - i, "last_played": None, "release_year": "~",
+             "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"}
             for i in range(75)
         ]
 
@@ -805,8 +829,8 @@ class TestLibraryCornerCases:
 
         games_100 = [
             {"name": f"Game {i:03d}", "platform": "steam", "app_id": str(i),
-             "playtime_minutes": 200 - i,
-             "rawg_rating": None, "metacritic": None, "genres": []}
+             "playtime_minutes": 200 - i, "last_played": None, "release_year": "~",
+             "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"}
             for i in range(100)
         ]
 
@@ -899,8 +923,8 @@ class TestRecommendCornerCases:
         session_id = "sess-exact-threshold"
         _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
         games = [{"name": "Threshold Game", "platform": "steam", "app_id": "1",
-                  "playtime_minutes": 60,
-                  "rawg_rating": None, "metacritic": None, "genres": []}]
+                  "playtime_minutes": 60, "last_played": None, "release_year": "~",
+                  "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"}]
         resp = self._recommend(client, session_id, games=games,
                                mode="new", max_new_minutes=60)
         events = parse_sse(resp.text)
@@ -919,8 +943,8 @@ class TestRecommendCornerCases:
         session_id = "sess-61"
         _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
         games = [{"name": "Barely Played", "platform": "steam", "app_id": "1",
-                  "playtime_minutes": 61,
-                  "rawg_rating": None, "metacritic": None, "genres": []}]
+                  "playtime_minutes": 61, "last_played": None, "release_year": "~",
+                  "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"}]
         resp = self._recommend(client, session_id, games=games,
                                mode="new", max_new_minutes=60)
         events = parse_sse(resp.text)
@@ -937,7 +961,8 @@ class TestRecommendCornerCases:
         _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
         games = [
             {"name": f"Unplayed {i}", "platform": "steam", "app_id": str(i),
-             "playtime_minutes": 0, "rawg_rating": None, "metacritic": None, "genres": []}
+             "playtime_minutes": 0, "last_played": None, "release_year": "~",
+             "rawg_rating": None, "metacritic": None, "genres": [], "tags": [], "gog_rating": "~"}
             for i in range(5)
         ]
         resp = self._recommend(client, session_id, games=games, mode="library")

@@ -97,27 +97,39 @@ FAKE_GAMES = [
         "platform":         "steam",
         "app_id":           "292030",
         "playtime_minutes": 7200,    # 120 hours — clearly "most played"
+        "last_played":      "1700000000",
+        "release_year":     "~",     # Steam XML feed has no release dates; RAWG fills this in
         "rawg_rating":      4.7,
         "metacritic":       93,
         "genres":           ["RPG", "Adventure"],
+        "tags":             ["Open World", "Story Rich", "Fantasy"],
+        "gog_rating":       "~",     # Not a GOG game
     },
     {
         "name":             "Hades",
         "platform":         "steam",
         "app_id":           "1145360",
         "playtime_minutes": 2700,    # 45 hours — "played"
+        "last_played":      "1690000000",
+        "release_year":     2020,
         "rawg_rating":      4.5,
         "metacritic":       93,
         "genres":           ["Roguelite", "Action"],
+        "tags":             ["Roguelike", "Hack and Slash"],
+        "gog_rating":       "~",
     },
     {
         "name":             "Disco Elysium",
         "platform":         "steam",
         "app_id":           "632470",
         "playtime_minutes": 0,       # 0 minutes — "unplayed"
+        "last_played":      None,
+        "release_year":     2019,
         "rawg_rating":      4.8,
         "metacritic":       97,
         "genres":           ["RPG"],
+        "tags":             ["Story Rich", "Detective", "Choices Matter"],
+        "gog_rating":       "~",
     },
 ]
 
