@@ -128,7 +128,7 @@ async def index():
     The entire UI is a single HTML file — no build step, no bundler,
     no framework. It embeds CSS and vanilla JS directly.
     """
-    return (TEMPLATES_DIR / "index.html").read_text()
+    return (TEMPLATES_DIR / "index.html").read_text(encoding="utf-8")
 
 
 # ── Auth: Steam OpenID redirect flow ──────────────────────────────────────────
