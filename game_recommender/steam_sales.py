@@ -255,7 +255,7 @@ def get_all_sales(
     Returns:
         Merged, deduplicated list sorted by source priority then discount.
     """
-    from game_recommender.other_sales import get_cheapshark_deals, get_epic_free_games
+    from game_recommender.other_sales import get_cheapshark_deals, get_epic_free_games, get_gog_catalog_deals
 
     if sources is None:
         sources = _ALL_SOURCES
@@ -284,8 +284,17 @@ def get_all_sales(
         except Exception:
             pass
 
-    # ── CheapShark stores (GOG, Humble, Fanatical, GMG, Epic deals) ──────────
-    _cs_map = {"gog": "7", "humble": "11", "fanatical": "13", "gmg": "35", "epic_deals": "25"}
+    # ── GOG (direct catalog API — full list, not CheapShark subset) ──────────
+    if "gog" in sources:
+        if progress_callback:
+            progress_callback("Fetching GOG deals…")
+        try:
+            all_games += get_gog_catalog_deals(min_discount)
+        except Exception:
+            pass
+
+    # ── CheapShark stores (Humble, Fanatical, GMG, Epic deals) ───────────────
+    _cs_map = {"humble": "11", "fanatical": "13", "gmg": "35", "epic_deals": "25"}
     cs_store_ids = [_cs_map[s] for s in sources if s in _cs_map]
     if cs_store_ids:
         if progress_callback:

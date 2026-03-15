@@ -2,23 +2,98 @@
 Non-Steam game deal fetchers — all use public APIs with no key required.
 
 Sources:
-  CheapShark — aggregates deals from GOG, Humble Store, Fanatical,
-                GreenManGaming, and the Epic Games Store discount catalog.
-  Epic Free  — Epic's rotating weekly free game promotions (always 100% off).
+  GOG Catalog — GOG's own storefront API; returns all discounted GOG titles.
+  CheapShark  — aggregates deals from Humble Store, Fanatical, GreenManGaming,
+                and the Epic Games Store discount catalog.
+  Epic Free   — Epic's rotating weekly free game promotions (always 100% off).
 """
 
 import requests
 from game_recommender.steam_sales import SaleGame
 
 
-# CheapShark store IDs → human-readable names
+# CheapShark store IDs → human-readable names (GOG is queried directly now)
 _CS_STORE_NAMES: dict[str, str] = {
-    "7":  "GOG",
     "11": "Humble Store",
     "13": "Fanatical",
     "25": "Epic Games Store",
     "35": "GreenManGaming",
 }
+
+_GOG_CATALOG_URL = "https://catalog.gog.com/v1/catalog"
+_GOG_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; game-recommender/1.0)"}
+
+
+def get_gog_catalog_deals(min_discount: int = 40, page_size: int = 48) -> list[SaleGame]:
+    """Fetch discounted games directly from GOG's storefront catalog API.
+
+    Queries GOG's own catalog endpoint (the same one powering the GOG store
+    page) rather than going through a third-party aggregator. This returns
+    the complete set of discounted GOG titles, not just the subset indexed
+    by CheapShark.
+
+    The API is paginated (max 48 per page). We keep fetching until a page
+    comes back with fewer than page_size results.
+
+    Args:
+        min_discount: Minimum discount percentage to include (0–100).
+        page_size: Results per page; 48 is the API's documented maximum.
+
+    Returns:
+        List of SaleGame objects sorted by discount percentage descending.
+    """
+    games: list[SaleGame] = []
+    page = 1
+
+    while True:
+        try:
+            resp = requests.get(
+                _GOG_CATALOG_URL,
+                params={
+                    "discounted":   "eq:true",
+                    "productType":  "in:game,pack",
+                    "order":        "desc:discount",
+                    "limit":        page_size,
+                    "page":         page,
+                    "countryCode":  "US",
+                    "locale":       "en-US",
+                    "currencyCode": "USD",
+                },
+                headers=_GOG_HEADERS,
+                timeout=10,
+            )
+            resp.raise_for_status()
+        except Exception:
+            break
+
+        products = resp.json().get("products", [])
+        for product in products:
+            price = product.get("price") or {}
+            if not price.get("isDiscounted"):
+                continue
+            discount = int(price.get("discountPercentage", 0))
+            if discount < min_discount:
+                continue
+            # baseAmount / finalAmount are decimal strings, e.g. "29.99"
+            try:
+                base_cents  = round(float(price.get("baseAmount",  0)) * 100)
+                final_cents = round(float(price.get("finalAmount", 0)) * 100)
+            except (TypeError, ValueError):
+                continue
+            games.append(SaleGame(
+                name=product.get("title", ""),
+                app_id=str(product.get("id", "")),
+                discount_percent=discount,
+                original_price_cents=base_cents,
+                sale_price_cents=final_cents,
+                store="GOG",
+            ))
+
+        if len(products) < page_size:
+            break
+        page += 1
+
+    return sorted(games, key=lambda g: g.discount_percent, reverse=True)
 
 
 def get_cheapshark_deals(
