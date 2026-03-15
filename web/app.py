@@ -1193,16 +1193,20 @@ def _build_discover_prompt(games: list[dict], preferences: str, count: int) -> s
     if count > 10:
         format_instructions = f"""List exactly {count} games. For each, use this compact format:
 
-**N. Game Name** (Platform) — One sentence on why it suits this player.
+**N. [Game Name](https://store.steampowered.com/search/?term=Game+Name)** (Platform) — One sentence on why it suits this player.
+
+Replace "Game Name" and "Game+Name" with the actual title. Use the Steam search link for Steam games; for Epic-exclusive games use https://store.epicgames.com/browse?q=Game+Name; for GOG-only games use https://www.gog.com/en/games?search=Game+Name.
 
 No other commentary. Just the numbered list."""
     else:
         format_instructions = f"""Recommend exactly {count} games. For each:
 
-1. **Game Name** (Platform, Release Year)
+1. **[Game Name](https://store.steampowered.com/search/?term=Game+Name)** (Platform, Release Year)
    - **Why it fits:** 2–3 sentences connecting it to games they already love
    - **What makes it special:** The one thing that makes it stand out
    - **Where to get it:** Steam / Epic / GOG / console — and roughly what it costs
+
+Replace "Game Name" and "Game+Name" in each link with the actual title. For Epic-exclusive games use https://store.epicgames.com/browse?q=Game+Name; for GOG-only games use https://www.gog.com/en/games?search=Game+Name.
 
 End with a one-sentence note on the common thread running through your picks."""
 

@@ -1674,6 +1674,14 @@ function toggleViz() {
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
+// Make all links in DOMPurify-sanitized content open in a new tab safely
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
 function escHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
