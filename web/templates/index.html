@@ -551,8 +551,10 @@
           <option value="playtime">Sort: Playtime</option>
           <option value="last_played">Sort: Last Played</option>
           <option value="name">Sort: Name</option>
+          <option value="release_year">Sort: Release Year</option>
           <option value="rating">Sort: RAWG Rating</option>
           <option value="metacritic">Sort: Metacritic</option>
+          <option value="gog_rating">Sort: GOG Rating</option>
         </select>
         <span class="count-badge" id="lib-count"></span>
         <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="loadLibrary()">↻ Refresh</button>
@@ -571,9 +573,11 @@
               <th style="width:9%;cursor:pointer;" data-sort="platform" onclick="headerSort('platform')">Platform <span class="sort-ind" id="sind-platform"></span></th>
               <th style="width:11%;cursor:pointer;" data-sort="playtime" onclick="headerSort('playtime')">Playtime <span class="sort-ind" id="sind-playtime"></span></th>
               <th style="width:12%;cursor:pointer;" data-sort="last_played" onclick="headerSort('last_played')">Last Played <span class="sort-ind" id="sind-last_played"></span></th>
-              <th style="width:9%;cursor:pointer;" data-sort="rating" onclick="headerSort('rating')">RAWG <span class="sort-ind" id="sind-rating"></span></th>
-              <th style="width:10%;cursor:pointer;" data-sort="metacritic" onclick="headerSort('metacritic')">Metacritic <span class="sort-ind" id="sind-metacritic"></span></th>
-              <th style="width:13%">Genres</th>
+              <th style="width:7%;cursor:pointer;" data-sort="release_year" onclick="headerSort('release_year')">Year <span class="sort-ind" id="sind-release_year"></span></th>
+              <th style="width:8%;cursor:pointer;" data-sort="rating" onclick="headerSort('rating')">RAWG <span class="sort-ind" id="sind-rating"></span></th>
+              <th style="width:9%;cursor:pointer;" data-sort="metacritic" onclick="headerSort('metacritic')">Metacritic <span class="sort-ind" id="sind-metacritic"></span></th>
+              <th style="width:8%;cursor:pointer;" data-sort="gog_rating" onclick="headerSort('gog_rating')">GOG Rating <span class="sort-ind" id="sind-gog_rating"></span></th>
+              <th style="width:13%">Genres / Tags</th>
             </tr>
           </thead>
           <tbody id="game-table-body"></tbody>
@@ -897,21 +901,36 @@ function renderLibraryTable(games) {
         lastPlayed = `<span style="color:var(--muted);font-size:0.8rem;">${d.toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'})}</span>`;
       }
     }
+    // "~" = platform doesn't have this field (show –), null/undefined = unknown (show ○)
+    const sentinel = v => v === '~'
+      ? '<span style="color:var(--border)">–</span>'
+      : '<span style="color:var(--border)">○</span>';
     const rawg = g.rawg_rating
       ? `<span class="rating-cell">★ ${g.rawg_rating.toFixed(1)}</span>`
-      : '<span style="color:var(--border)">—</span>';
+      : sentinel(g.rawg_rating);
     const mc = g.metacritic
       ? `<span class="rating-cell" style="color:${g.metacritic >= 80 ? 'var(--green)' : g.metacritic >= 60 ? 'var(--yellow)' : 'var(--red)'}">${g.metacritic}</span>`
-      : '<span style="color:var(--border)">—</span>';
-    const genres = (g.genres || []).slice(0,2).join(', ') || '';
+      : sentinel(g.metacritic);
+    const yr = (g.release_year && g.release_year !== '~')
+      ? `<span style="color:var(--muted);font-size:0.85rem;">${g.release_year}</span>`
+      : sentinel(g.release_year);
+    const gogR = (g.gog_rating && g.gog_rating !== '~')
+      ? `<span class="rating-cell">${g.gog_rating.toFixed(1)}</span>`
+      : sentinel(g.gog_rating);
+    const genreTags = [
+      ...(g.genres || []).slice(0, 2),
+      ...(g.tags || []).slice(0, 1),
+    ].join(', ');
     return `<tr>
       <td>${escHtml(g.name)}</td>
       <td><span class="badge badge-${g.platform}">${g.platform}</span></td>
       <td>${hours}</td>
       <td>${lastPlayed}</td>
+      <td>${yr}</td>
       <td>${rawg}</td>
       <td>${mc}</td>
-      <td style="color:var(--muted);font-size:0.78rem;">${escHtml(genres)}</td>
+      <td>${gogR}</td>
+      <td style="color:var(--muted);font-size:0.78rem;">${escHtml(genreTags)}</td>
     </tr>`;
   }).join('');
 
@@ -979,11 +998,15 @@ function _sortGames(games) {
     sorted.sort((a,b) => dir * ((a.rawg_rating||0) - (b.rawg_rating||0)));
   else if (tableSortCol === 'metacritic')
     sorted.sort((a,b) => dir * ((a.metacritic||0) - (b.metacritic||0)));
+  else if (tableSortCol === 'release_year')
+    sorted.sort((a,b) => dir * (((typeof a.release_year === 'number') ? a.release_year : 0) - ((typeof b.release_year === 'number') ? b.release_year : 0)));
+  else if (tableSortCol === 'gog_rating')
+    sorted.sort((a,b) => dir * (((typeof a.gog_rating === 'number') ? a.gog_rating : 0) - ((typeof b.gog_rating === 'number') ? b.gog_rating : 0)));
   return sorted;
 }
 
 function _updateSortIndicators() {
-  ['name','platform','playtime','last_played','rating','metacritic'].forEach(col => {
+  ['name','platform','playtime','last_played','release_year','rating','metacritic','gog_rating'].forEach(col => {
     const el = document.getElementById(`sind-${col}`);
     if (!el) return;
     el.textContent = col === tableSortCol ? (tableSortDir === 'asc' ? ' ▲' : ' ▼') : '';
@@ -991,7 +1014,7 @@ function _updateSortIndicators() {
 }
 
 function exportCSV() {
-  const cols = ['name','platform','app_id','playtime_minutes','last_played','rawg_rating','metacritic','genres'];
+  const cols = ['name','platform','app_id','playtime_minutes','last_played','release_year','rawg_rating','metacritic','gog_rating','genres','tags'];
   const escField = v => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -1004,9 +1027,12 @@ function exportCSV() {
       escField(g.app_id),
       escField(g.playtime_minutes),
       escField(g.last_played),
+      escField(g.release_year),
       escField(g.rawg_rating),
       escField(g.metacritic),
+      escField(g.gog_rating),
       escField((g.genres||[]).join(';')),
+      escField((g.tags||[]).join(';')),
     ].join(','));
   });
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
@@ -1072,21 +1098,28 @@ function _parseCSV(text) {
   const iName = idx('name'), iPlatform = idx('platform'), iAppId = idx('app_id');
   const iPT = idx('playtime_minutes'), iLP = idx('last_played');
   const iRawg = idx('rawg_rating'), iMC = idx('metacritic'), iGenres = idx('genres');
+  const iRY = idx('release_year'), iGogR = idx('gog_rating'), iTags = idx('tags');
   if (iName < 0 || iPlatform < 0) throw new Error('missing required columns: name, platform');
 
   return lines.slice(1).filter(l => l.trim()).map(line => {
     const f = tokenise(line);
     const get = i => (i >= 0 && i < f.length) ? f[i] : '';
     const num = (i, fn) => { const v = get(i); return v ? fn(v) : null; };
+    // Restore sentinel "~" if that's what was exported; otherwise parse as number
+    const maybeYear = v => v === '~' ? '~' : (v ? parseInt(v, 10) : null);
+    const maybeRating = v => v === '~' ? '~' : (v ? parseFloat(v) : null);
     return {
       name:             get(iName),
       platform:         get(iPlatform),
       app_id:           get(iAppId),
       playtime_minutes: num(iPT, v => parseInt(v,10)) ?? 0,
       last_played:      get(iLP) || null,
+      release_year:     maybeYear(get(iRY)),
       rawg_rating:      num(iRawg, v => parseFloat(v)),
       metacritic:       num(iMC, v => parseInt(v,10)),
+      gog_rating:       maybeRating(get(iGogR)),
       genres:           get(iGenres) ? get(iGenres).split(';').filter(Boolean) : [],
+      tags:             get(iTags)   ? get(iTags).split(';').filter(Boolean)   : [],
     };
   });
 }
