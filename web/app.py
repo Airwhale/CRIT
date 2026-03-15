@@ -23,6 +23,7 @@ import json
 import asyncio
 import os
 import re
+import html
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -639,14 +640,14 @@ def _fetch_gog(creds: dict) -> list[dict]:
 
 
 def _fix_mojibake(s: str) -> str:
-    """Fix strings that are UTF-8 bytes decoded as Latin-1 (mojibake).
+    """Clean up common encoding problems in strings from platform/RAWG APIs.
 
-    Some platform APIs return UTF-8 encoded strings but the HTTP layer
-    misidentifies the charset, causing characters like emoji to appear as
-    sequences like ðŸŸ¦ instead of 🟦. Re-encoding as Latin-1 and decoding
-    as UTF-8 recovers the original string. If the string is already correct
-    UTF-8, this is a no-op.
+    1. Unescape HTML entities: &amp; → &, &#39; → ', Tom Clancy&#39;s → Tom Clancy's
+    2. Fix UTF-8 bytes mis-decoded as Latin-1: â€™ → ', ðŸŸ¦ → 🟦
     """
+    if not s:
+        return s
+    s = html.unescape(s)
     try:
         return s.encode("latin-1").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
@@ -694,7 +695,7 @@ def _enrich_with_rawg(games: list[dict], api_key: str) -> list[dict]:
             return {**game,
                 "rawg_rating": rating.rawg_rating,
                 "metacritic":  rating.metacritic_score,
-                "genres":      rating.genres,
+                "genres":      [_fix_mojibake(g) for g in rating.genres],
             }
         return game
 
