@@ -427,34 +427,55 @@
     user-select: none;
   }
   .viz-section-header:hover h2 { color: var(--accent2); }
-
-  #genre-bubbles {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 14px;
-    padding: 1.25rem 1rem 1.5rem;
-    min-height: 100px;
-  }
-  .genre-bubble {
-    border-radius: 50%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 8px;
-    box-sizing: border-box;
-    line-height: 1.25;
-    cursor: default;
-    transition: transform 0.15s ease, filter 0.15s ease;
-  }
-  .genre-bubble:hover { transform: scale(1.1); filter: brightness(1.25); }
-  .bubble-name { font-weight: 700; word-break: break-word; hyphens: auto; }
-  .bubble-count { opacity: 0.75; font-size: 0.82em; margin-top: 2px; }
   #viz-toggle-icon { margin-left: auto; color: var(--muted); font-size: 0.82rem; font-weight: 400; }
   #viz-empty { color: var(--muted); font-size: 0.85rem; padding: 1rem; text-align: center; }
+
+  /* ── Library Insights chart ── */
+  .ins-summary {
+    display: flex; gap: 1.5rem; flex-wrap: wrap;
+    font-size: 0.82rem; color: var(--muted);
+    padding: 0.75rem 0 0.5rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.75rem;
+  }
+  .ins-val { color: var(--fg); font-weight: 700; font-size: 1rem; }
+  .ins-controls {
+    display: flex; align-items: center; gap: 0.5rem;
+    margin-bottom: 0.5rem; flex-wrap: wrap;
+  }
+  .ins-sort-btn {
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--muted); border-radius: 6px;
+    padding: 2px 10px; cursor: pointer; font-size: 0.78rem;
+  }
+  .ins-sort-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ins-col-headers {
+    display: grid;
+    grid-template-columns: minmax(90px,160px) 1fr 1fr;
+    gap: 8px; font-size: 0.75rem; color: var(--muted);
+    padding: 0 0 4px; margin-bottom: 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .ins-chart { display: flex; flex-direction: column; gap: 5px; padding: 4px 0 0.75rem; }
+  .ins-row {
+    display: grid;
+    grid-template-columns: minmax(90px,160px) 1fr 1fr;
+    align-items: center; gap: 8px;
+  }
+  .ins-name {
+    font-size: 0.8rem; font-weight: 600; color: var(--fg);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-align: right; padding-right: 4px;
+  }
+  .ins-bar-wrap { display: flex; align-items: center; gap: 6px; }
+  .ins-bar-track {
+    flex: 1; height: 13px; background: var(--bg3);
+    border-radius: 3px; overflow: hidden;
+  }
+  .ins-bar-fill { height: 100%; border-radius: 3px; transition: width 0.35s ease; min-width: 2px; }
+  .ins-bar-games { background: var(--accent); }
+  .ins-bar-hours { background: #34d399; }
+  .ins-bar-label { color: var(--muted); font-size: 0.75rem; white-space: nowrap; min-width: 32px; }
 </style>
 </head>
 <body>
@@ -729,8 +750,7 @@
       <span id="viz-toggle-icon">▲ Hide</span>
     </div>
     <div id="viz-body">
-      <p style="color:var(--muted);font-size:0.82rem;margin:0 0 0 1rem;">Genres across your library — bubble size reflects number of games.</p>
-      <div id="genre-bubbles"></div>
+      <div id="insights-container"></div>
       <div id="viz-empty" hidden>No genre data available — try loading your library with RAWG ratings enabled.</div>
     </div>
   </div><!-- viz card -->
@@ -951,7 +971,7 @@ async function loadLibrary() {
     content.removeAttribute('hidden');
     document.getElementById('rec-section').removeAttribute('hidden');
     document.getElementById('viz-section').removeAttribute('hidden');
-    renderGenreBubbles();
+    renderLibraryInsights();
 
     loadStatus.innerHTML = '';
   } catch(e) {
@@ -1207,7 +1227,7 @@ function importCSV(input) {
       document.getElementById('library-content').removeAttribute('hidden');
       document.getElementById('rec-section').removeAttribute('hidden');
       document.getElementById('viz-section').removeAttribute('hidden');
-      renderGenreBubbles();
+      renderLibraryInsights();
     } catch(err) {
       document.getElementById('library-errors').innerHTML =
         `<div class="notice error visible">CSV parse error: ${escHtml(err.message)}</div>`;
@@ -1371,56 +1391,81 @@ function getRecommendations() {
 }
 
 // ── Genre Bubble Chart ──────────────────────────────────────────────────────────
-const BUBBLE_COLORS = [
-  '#7c6aff','#34d399','#fbbf24','#f87171','#a78bfa',
-  '#60a5fa','#f472b6','#fb923c','#4ade80','#38bdf8',
-];
+let insightsSortKey = 'games';
 
-function renderGenreBubbles() {
-  const container = document.getElementById('genre-bubbles');
+function setInsightSort(key) {
+  insightsSortKey = key;
+  renderLibraryInsights();
+}
+
+function renderLibraryInsights() {
+  const container = document.getElementById('insights-container');
   const emptyMsg  = document.getElementById('viz-empty');
-  container.innerHTML = '';
 
-  // Tally genres (and total playtime per genre)
+  // Tally genres
   const count    = {};
   const playtime = {};
+  let totalMinutes = 0;
   for (const g of allGames) {
+    totalMinutes += (g.playtime_minutes || 0);
     for (const genre of (g.genres || [])) {
       count[genre]    = (count[genre]    || 0) + 1;
       playtime[genre] = (playtime[genre] || 0) + (g.playtime_minutes || 0);
     }
   }
 
-  const entries = Object.entries(count).sort((a, b) => b[1] - a[1]).slice(0, 30);
+  const entries = Object.entries(count)
+    .map(([name, cnt]) => ({ name, cnt, hrs: Math.round((playtime[name] || 0) / 60) }))
+    .sort((a, b) => insightsSortKey === 'hours' ? b.hrs - a.hrs : b.cnt - a.cnt)
+    .slice(0, 25);
 
   if (entries.length === 0) {
+    container.innerHTML = '';
     emptyMsg.removeAttribute('hidden');
     return;
   }
   emptyMsg.setAttribute('hidden', '');
 
-  const maxCount = entries[0][1];
+  const maxCnt = entries[0].cnt;
+  const maxHrs = Math.max(...entries.map(e => e.hrs), 1);
+  const totalGenres = Object.keys(count).length;
+  const totalHrs = Math.round(totalMinutes / 60);
 
-  entries.forEach(([name, cnt], i) => {
-    const frac  = Math.sqrt(cnt / maxCount);
-    const size  = Math.round(56 + frac * 124); // 56 – 180 px
-    const fs    = Math.max(9, Math.round(9 + frac * 9));
-    const color = BUBBLE_COLORS[i % BUBBLE_COLORS.length];
-    const hrs   = Math.round((playtime[name] || 0) / 60);
+  const rows = entries.map(e => {
+    const gPct = Math.round(e.cnt / maxCnt * 100);
+    const hPct = e.hrs > 0 ? Math.round(e.hrs / maxHrs * 100) : 0;
+    return `
+      <div class="ins-row">
+        <div class="ins-name" title="${escHtml(e.name)}">${escHtml(e.name)}</div>
+        <div class="ins-bar-wrap">
+          <div class="ins-bar-track"><div class="ins-bar-fill ins-bar-games" style="width:${gPct}%"></div></div>
+          <span class="ins-bar-label">${e.cnt}</span>
+        </div>
+        <div class="ins-bar-wrap">
+          <div class="ins-bar-track"><div class="ins-bar-fill ins-bar-hours" style="width:${hPct}%"></div></div>
+          <span class="ins-bar-label">${e.hrs > 0 ? e.hrs + 'h' : '—'}</span>
+        </div>
+      </div>`;
+  }).join('');
 
-    const el = document.createElement('div');
-    el.className = 'genre-bubble';
-    el.style.cssText =
-      `width:${size}px;height:${size}px;` +
-      `background:${color}1a;border:2px solid ${color}55;` +
-      `color:${color};font-size:${fs}px;`;
-    el.title = `${name}: ${cnt} game${cnt !== 1 ? 's' : ''}` +
-               (hrs > 0 ? `, ${hrs}h played` : '');
-    el.innerHTML =
-      `<span class="bubble-name">${escHtml(name)}</span>` +
-      `<span class="bubble-count">${cnt}</span>`;
-    container.appendChild(el);
-  });
+  container.innerHTML = `
+    <div class="ins-summary">
+      <span><span class="ins-val">${allGames.length}</span> games</span>
+      <span><span class="ins-val">${totalGenres}</span> genres</span>
+      <span><span class="ins-val">${totalHrs}</span> hrs played</span>
+    </div>
+    <div class="ins-controls">
+      <span style="color:var(--muted);font-size:0.78rem;">Sort by:</span>
+      <button class="ins-sort-btn${insightsSortKey === 'games' ? ' active' : ''}" onclick="setInsightSort('games')">Games</button>
+      <button class="ins-sort-btn${insightsSortKey === 'hours' ? ' active' : ''}" onclick="setInsightSort('hours')">Hours Played</button>
+    </div>
+    <div class="ins-col-headers">
+      <div></div>
+      <div style="padding-left:2px;">Games</div>
+      <div style="padding-left:2px;">Hours Played</div>
+    </div>
+    <div class="ins-chart">${rows}</div>
+  `;
 }
 
 function toggleViz() {
