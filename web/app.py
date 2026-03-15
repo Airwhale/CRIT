@@ -751,7 +751,7 @@ async def recommend(
         raise HTTPException(400, "preferences must be 500 characters or fewer")
 
     # Clamp count silently rather than erroring — improves UX for edge inputs
-    count = max(1, min(count, 25))
+    count = max(1, min(count, 50))
 
     async def event_stream():
         """Async generator that yields SSE-formatted data lines."""

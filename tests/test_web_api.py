@@ -569,10 +569,10 @@ class TestRecommend:
         events = parse_sse(resp.text)
         assert any("error" in e for e in events)
 
-    def test_count_clamped_to_10(self, client):
-        """count=99 should be silently clamped to 10 rather than erroring.
+    def test_count_clamped_to_50(self, client):
+        """count=99 should be silently clamped to 50 rather than erroring.
 
-        The endpoint uses max(1, min(count, 10)) so any value outside [1,10]
+        The endpoint uses max(1, min(count, 50)) so any value outside [1,50]
         is brought into range without producing a 400 response.
         """
         session_id = "sess-clamp"
