@@ -855,6 +855,20 @@ async def recommend(
                 yield f'data: {json.dumps({"error": "No sales found above the discount threshold. Try lowering it."})}\n\n'
                 return
 
+            # Emit the raw deals list so the frontend can render a table
+            deals_payload = [
+                {
+                    "name":     g.name,
+                    "store":    g.store,
+                    "discount": g.discount_percent,
+                    "sale":     g.sale_price,
+                    "original": g.original_price,
+                    "wishlist": g.from_wishlist,
+                }
+                for g in sale_games
+            ]
+            yield f'data: {json.dumps({"deals": deals_payload})}\n\n'
+
             prompt = _build_sales_prompt(games_raw, sale_games, preferences, count)
 
         elif mode == "new":

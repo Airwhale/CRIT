@@ -333,6 +333,51 @@
   #rec-output em { color: var(--muted); font-style: italic; }
   #rec-output hr { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
 
+  /* ── Deals collapsible table ── */
+  #deals-table-wrap { margin-bottom: 1rem; }
+  #deals-table-wrap details { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  #deals-table-wrap summary {
+    padding: 0.5rem 0.85rem;
+    background: var(--bg2);
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--muted);
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  #deals-table-wrap summary::-webkit-details-marker { display: none; }
+  #deals-table-wrap summary .toggle-arrow { font-size: 0.65rem; transition: transform 0.15s; }
+  #deals-table-wrap details[open] summary .toggle-arrow { transform: rotate(90deg); }
+  #deals-table-wrap .deals-scroll { overflow-x: auto; }
+  #deals-table-wrap table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+  #deals-table-wrap th {
+    background: var(--bg2);
+    color: var(--muted);
+    font-weight: 600;
+    padding: 0.35rem 0.6rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  #deals-table-wrap td {
+    padding: 0.3rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  #deals-table-wrap tr:last-child td { border-bottom: none; }
+  #deals-table-wrap tr:hover td { background: var(--bg2); }
+  #deals-table-wrap .col-discount { color: var(--accent2); font-weight: 700; text-align: right; }
+  #deals-table-wrap .col-sale    { font-weight: 600; }
+  #deals-table-wrap .col-orig    { color: var(--muted); text-decoration: line-through; }
+  #deals-table-wrap .wishlist-star { color: gold; }
+
   /* ── Mode tabs ── */
   .mode-tabs {
     display: flex;
@@ -761,6 +806,7 @@
 
     <div id="rec-output">
       <div id="rec-status-line" class="rec-status" hidden></div>
+      <div id="deals-table-wrap" hidden></div>
       <div id="rec-content"></div>
       <span class="streaming-cursor" id="rec-cursor" hidden></span>
     </div>
@@ -1357,8 +1403,12 @@ function getRecommendations() {
   const statusLine = document.getElementById('rec-status-line');
   const btn        = document.getElementById('rec-btn');
 
+  const dealsWrap = document.getElementById('deals-table-wrap');
+
   output.classList.add('visible');
   content.innerHTML = '';
+  dealsWrap.innerHTML = '';
+  dealsWrap.hidden = true;
   statusLine.hidden = true;
   statusLine.innerHTML = '';
   cursor.removeAttribute('hidden');
@@ -1403,6 +1453,37 @@ function getRecommendations() {
     if (msg.type === 'status') {
       statusLine.innerHTML = `<span class="spinner"></span>${escHtml(msg.msg)}`;
       statusLine.hidden = false;
+      return;
+    }
+
+    if (msg.deals) {
+      const deals = msg.deals;
+      const rows = deals.map(d => `
+        <tr>
+          <td>${d.wishlist ? '<span class="wishlist-star" title="On your wishlist">★</span>' : ''}</td>
+          <td>${escHtml(d.name)}</td>
+          <td>${escHtml(d.store)}</td>
+          <td class="col-discount">${d.discount}%</td>
+          <td class="col-sale">${escHtml(d.sale)}</td>
+          <td class="col-orig">${escHtml(d.original)}</td>
+        </tr>`).join('');
+      dealsWrap.innerHTML = `
+        <details>
+          <summary>
+            <span class="toggle-arrow">▶</span>
+            ${deals.length} deal${deals.length !== 1 ? 's' : ''} found — click to browse
+          </summary>
+          <div class="deals-scroll">
+            <table>
+              <thead><tr>
+                <th></th><th>Name</th><th>Store</th>
+                <th>Discount</th><th>Sale Price</th><th>Original</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </details>`;
+      dealsWrap.hidden = false;
       return;
     }
 
