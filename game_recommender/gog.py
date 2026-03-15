@@ -149,12 +149,24 @@ def get_gog_library(access_token: str) -> list[Game]:
             if not title:
                 continue  # Skip blank or null titles
 
-            # Release year from unix timestamp (0 or missing → None)
-            rd_ts = product.get("releaseDate") or 0
+            # Release year — GOG can return releaseDate as:
+            #   • a Unix timestamp integer (historic behaviour)
+            #   • a dict {"date": "YYYY-MM-DD HH:MM:SS", "timezone_type": 3, ...}
+            # Normalise both forms to a year int (or None when absent/invalid).
+            from datetime import datetime, timezone
+            raw_rd = product.get("releaseDate")
+            release_year = None
             try:
-                from datetime import datetime, timezone
-                release_year = datetime.fromtimestamp(rd_ts, tz=timezone.utc).year if rd_ts else None
-            except (OSError, OverflowError, ValueError):
+                if isinstance(raw_rd, dict):
+                    # Extract YYYY from the "date" string; ignore time/timezone.
+                    date_str = raw_rd.get("date") or ""
+                    if len(date_str) >= 4 and date_str[:4].isdigit():
+                        release_year = int(date_str[:4])
+                elif raw_rd:
+                    release_year = datetime.fromtimestamp(
+                        int(raw_rd), tz=timezone.utc
+                    ).year
+            except (OSError, OverflowError, ValueError, TypeError):
                 release_year = None
 
             # Community rating (0.0 or missing → None so we can distinguish "unrated" from 0).

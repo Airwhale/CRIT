@@ -317,3 +317,25 @@ class TestGogLibraryNewFields:
             games = get_gog_library("tok")
 
         assert games[0].gog_rating is None
+
+    def test_release_year_from_date_dict(self):
+        """releaseDate as a dict {"date": "YYYY-MM-DD ...", ...} extracts the year.
+
+        GOG changed the format of releaseDate from a Unix timestamp integer to a
+        PHP-style date dict.  Without this handling the call to
+        datetime.fromtimestamp(dict) raises 'argument must be int or float, not dict'.
+        """
+        date_dict = {"date": "2021-08-12 00:00:00.000000", "timezone_type": 3, "timezone": "UTC"}
+        resp = _products_resp([{"id": 1, "title": "New Format Game", "releaseDate": date_dict}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].release_year == 2021
+
+    def test_release_year_date_dict_missing_date_key_gives_none(self):
+        """A date dict with no 'date' key doesn't crash and produces None."""
+        resp = _products_resp([{"id": 1, "title": "Game", "releaseDate": {"timezone_type": 3}}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].release_year is None

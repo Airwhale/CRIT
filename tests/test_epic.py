@@ -621,3 +621,32 @@ class TestGetGamesViaAssets:
             games = _get_games_via_assets(s)
 
         assert [g.name for g in games] == ["Alpha Game", "Zombie Game"]
+
+# ── Assets endpoint v1 response format ────────────────────────────────────────
+
+class TestAssetsEndpointParsing:
+
+    def test_v1_flat_array_response_parsed(self):
+        """Assets endpoint v1 returns a flat JSON array, not {"assets": [...]}.
+
+        The v2 URL (/v2/platform/Windows/label/Live) returns 404; the v1 URL
+        (/Windows) returns a bare array.  _get_games_via_assets must accept both.
+        """
+        # v1-style flat array (no wrapping object)
+        assets_resp = MagicMock()
+        assets_resp.raise_for_status.return_value = None
+        assets_resp.json.return_value = [   # <-- flat list, not {"assets": [...]}
+            {"namespace": "ns1", "catalogItemId": "cid1", "appName": "code"},
+        ]
+        catalog_resp = MagicMock()
+        catalog_resp.raise_for_status.return_value = None
+        catalog_resp.json.return_value = {"cid1": {"title": "My Game", "releaseInfo": []}}
+
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = MagicMock()
+            s.get.side_effect = [assets_resp, catalog_resp]
+            MockSession.return_value = s
+            games = _get_games_via_assets(s)
+
+        assert len(games) == 1
+        assert games[0].name == "My Game"

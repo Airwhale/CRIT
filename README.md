@@ -104,7 +104,7 @@ The test suite covers every module with both success and failure scenarios, plus
 python -m pytest tests/ -v
 ```
 
-Expected output: **183 tests, 0 failures.**
+Expected output: **186 tests, 0 failures.**
 
 ### Test layout
 
@@ -112,8 +112,8 @@ Expected output: **183 tests, 0 failures.**
 tests/
 ├── conftest.py          — shared fixtures: fake Claude stream, FAKE_GAMES, SSE parser
 ├── test_steam.py        — Steam library fetch (20 tests)
-├── test_epic.py         — Epic OAuth + library (33 tests)
-├── test_gog.py          — GOG OAuth + library (26 tests)
+├── test_epic.py         — Epic OAuth + library (34 tests)
+├── test_gog.py          — GOG OAuth + library (28 tests)
 ├── test_ratings.py      — RAWG ratings + enrich_games (22 tests)
 ├── test_steam_sales.py  — featured specials, wishlist, get_all_sales (33 tests)
 └── test_web_api.py      — FastAPI endpoints end-to-end (47 tests)

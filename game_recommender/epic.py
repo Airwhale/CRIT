@@ -44,9 +44,10 @@ _LIBRARY_URL = "https://library-service.live.use1a.on.epicgames.com/library/api/
 # Fallback: launcher assets endpoint lists every owned app by appName/catalogItemId.
 # This is the same mechanism Heroic Games Launcher uses and is more reliable than
 # the library service when the library service returns empty results.
+# v1 endpoint — returns a flat JSON array (not wrapped in an object).
 _ASSETS_URL = (
     "https://launcher-public-service-prod06.ol.epicgames.com"
-    "/launcher/api/public/assets/v2/platform/Windows/label/Live"
+    "/launcher/api/public/assets/Windows"
 )
 
 # Catalog service resolves catalogItemId → human-readable title, release date, etc.
@@ -181,7 +182,9 @@ def _get_games_via_assets(session: requests.Session) -> list[Game]:
     """
     resp = session.get(_ASSETS_URL, timeout=15)
     resp.raise_for_status()
-    assets = resp.json().get("assets") or []
+    # v1 endpoint returns a flat JSON array, not {"assets": [...]}.
+    raw = resp.json()
+    assets = raw if isinstance(raw, list) else (raw.get("assets") or [])
     logger.debug("Epic assets endpoint returned %d assets", len(assets))
 
     # Group catalog IDs by namespace for batch catalog lookups.
