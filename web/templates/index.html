@@ -527,6 +527,9 @@
               2. After logging in, the URL bar will contain <code style="color:var(--accent2)">code=XXXXX</code> — copy that code value.<br>
               3. Paste it below and click Connect.
             </p>
+            <p style="margin:4px 0 0;font-size:0.8rem;color:var(--accent2);">
+              ⚠ Act fast — GOG authorization codes expire in ~30 seconds (single-use OAuth tokens consumed on first exchange).
+            </p>
             <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:6px;">
               <input type="text" id="gog-code" placeholder="Paste code or full URL…" style="width:100%;font-family:monospace;font-size:0.82rem;padding:0.4rem 0.6rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);box-sizing:border-box;">
               <button class="btn-platform btn-gog" style="white-space:nowrap;align-self:flex-start;" onclick="submitGogCode()">Connect</button>
