@@ -97,7 +97,7 @@ The test suite covers every module with both success and failure scenarios, plus
 python -m pytest tests/ -v
 ```
 
-Expected output: **160 tests, 0 failures.**
+Expected output: **162 tests, 0 failures.**
 
 ### Test layout
 
@@ -121,9 +121,7 @@ tests/
 | GOG | Token exchange & refresh, single/paginated library, alphabetical sort, blank-title skip | Bad code, expired token, HTTP / network error | `totalPages=0` makes one request, `title: null` skipped, `products: null` crash path, `id=0` stored as `"0"` |
 | Ratings | Full `GameRating` fields, `None` on no results, case-insensitive cache, tags capped at 10, progress callback | Missing API key, HTTP error, network error | Minimal result (sparse fields), <10 tags all returned, `delay=0` valid, per-name cache isolation |
 | Steam sales | Discount filter, sort, price formatting, wishlist date ordering, `max_check` cap, `get_all_sales` merge / wishlist-first / dedup / owned-game filter | HTTP errors, failed appdetails batch skipped, featured/wishlist errors handled gracefully | `discount == min_discount` included (strict `<`), `min_discount=0`, price `0` → `"unknown"`/`"free"`, `id=0` kept, wishlist version wins dedup, `owned_app_ids=None` |
-| Web API | HTML + security headers, Steam auth + cookie + game_count, platform status, disconnect, library, SSE streaming all three modes, `count` clamping | Missing fields (400), whitespace-only credentials (400), private Steam profile (400), no session, no API key, invalid mode, preferences too long, empty library, Claude exception | Whitespace credentials stripped → 400, `count=0` clamped to 1, `preferences` exactly 500 chars accepted, quotes/newlines in SSE text survive round-trip, `playtime == max_new_minutes` is unplayed, `playtime == 61` at threshold is played, top-75 RAWG boundary, RAWG failure returns unenriched games, partial platform failure returns surviving platform, session persists across calls |
-| Steam sales | Discount filtering & sorting, price formatting, wishlist date ordering, `max_check` cap, `get_all_sales` merge / dedup / owned-game filter | HTTP errors, failed appdetails batch skipped silently, featured/wishlist errors handled gracefully |
-| Web API | HTML + security headers, Steam auth + cookie, platform status, disconnect, library endpoint, SSE streaming for all three recommendation modes, `count` clamping | Missing fields (400), no session, no `ANTHROPIC_API_KEY`, invalid mode, preferences too long, empty library → streamed error, Claude exception → streamed error |
+| Web API | HTML + security headers, Steam auth + cookie + game_count, platform status, disconnect, library, SSE streaming all three modes, `count` clamping | Missing fields (400), whitespace-only credentials (400), private Steam profile (400), no session, no API key, invalid mode, preferences too long, empty library, Claude exception | Whitespace credentials stripped → 400, `count=0` clamped to 1, `preferences` exactly 500 chars accepted, quotes/newlines in SSE text survive round-trip, `playtime == max_new_minutes` is unplayed, `playtime == 61` at threshold is played, `rawg_limit` query param caps enrichment, RAWG failure returns unenriched games, partial platform failure returns surviving platform, session persists across calls |
 
 ---
 
@@ -144,7 +142,7 @@ tests/
 2. Your API key appears on the dashboard
 3. Copy it into `.env` as `RAWG_API_KEY`
 
-The free tier allows 20,000 requests/month. The app fetches ratings for up to 75 games per library load, so normal use is well within the limit.
+The free tier allows 20,000 requests/month. The app fetches one request per enriched game — use the **Enrich only top N games** control in the Load Library area to cap this if needed. Normal use is well within the free limit.
 
 ### Steam
 
@@ -200,9 +198,12 @@ Connect at least one platform. You can connect all three; the library view merge
 
 ### Step 2 — Load library
 
-Click **Load Library**. The app fetches your game list from all connected platforms, then enriches the top 75 titles with RAWG ratings and genres. For large libraries this can take 30–60 seconds.
+Click **Load Library**. The app fetches your game list from all connected platforms and enriches every title with RAWG ratings and genres. For large libraries this can take 30–60 seconds.
 
-Check **Skip RAWG ratings** to load in a few seconds — Claude will have less context but will still work.
+Two optional controls are available before clicking **Load Library**:
+
+- **Skip RAWG ratings** — skips enrichment entirely and loads in a few seconds. Claude will have less context but will still work.
+- **Enrich only top N games with RAWG** — type a number (e.g. `200`) to cap enrichment to the most-played N games. Leave blank to enrich all games (the default).
 
 ### Step 3 — Get recommendations
 
