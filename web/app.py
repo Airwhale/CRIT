@@ -102,17 +102,24 @@ def _set_session_cookie(response: Response, session_id: str) -> None:
     """Attach the session cookie to an outgoing response.
 
     Settings:
-      httponly=True   — JavaScript cannot read the cookie (XSS mitigation)
-      samesite=strict — Cookie not sent on cross-site requests (CSRF mitigation)
-      secure=?        — Only sent over HTTPS in production (configurable)
-      max_age=8h      — Session expires after 8 hours of inactivity
+      httponly=True  — JavaScript cannot read the cookie (XSS mitigation)
+      samesite=lax   — Sent on top-level navigations from external sites (required
+                       for OAuth/OpenID redirect callbacks: Steam redirects back from
+                       steamcommunity.com, Epic redirects back from epicgames.com).
+                       samesite=strict would block these redirects, causing the server
+                       to create a new session for the callback and orphan the existing
+                       one (losing Epic/GOG credentials when connecting Steam, etc.).
+                       lax still blocks cross-origin POST/iframe requests, protecting
+                       against CSRF on all state-changing endpoints.
+      secure=?       — Only sent over HTTPS in production (configurable)
+      max_age=8h     — Session expires after 8 hours of inactivity
     """
     response.set_cookie(
         "session_id",
         session_id,
         httponly=True,
         secure=_COOKIE_SECURE,
-        samesite="strict",
+        samesite="lax",
         max_age=60 * 60 * 8,  # 8 hours in seconds
     )
 
