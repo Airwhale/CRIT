@@ -685,7 +685,7 @@
     <!-- Mode tabs -->
     <div class="mode-tabs">
       <button class="mode-tab active" data-mode="library"  onclick="setMode('library')">🎮 From Library</button>
-      <button class="mode-tab"        data-mode="sales"    onclick="setMode('sales')">🛒 Steam Deals</button>
+      <button class="mode-tab"        data-mode="sales"    onclick="setMode('sales')">🛒 Deals</button>
       <button class="mode-tab"        data-mode="new"      onclick="setMode('new')">📦 Backlog</button>
       <button class="mode-tab"        data-mode="discover" onclick="setMode('discover')">🌐 Discover</button>
     </div>
@@ -698,10 +698,35 @@
                oninput="document.getElementById('min-discount-val').textContent = this.value + '%'">
         <span class="opt-val" id="min-discount-val">40%</span>
       </label>
-      <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
-        <input type="checkbox" id="include-wishlist" checked>
-        Include my wishlist
-      </label>
+      <div style="margin-top:0.4rem;">
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.35rem;">Sources:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-steam-featured" checked> Steam Featured
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-steam-wishlist" checked> Steam Wishlist
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-gog" checked> GOG
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-humble" checked> Humble Store
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-fanatical" checked> Fanatical
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-gmg" checked> Green Man Gaming
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-epic-deals" checked> Epic (deals)
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="src-epic-free" checked> Epic Free Games
+          </label>
+        </div>
+      </div>
     </div>
 
     <!-- New/Backlog mode options -->
@@ -1310,7 +1335,20 @@ function getRecommendations() {
   const prefs       = encodeURIComponent(document.getElementById('preferences').value.trim());
   const count       = parseInt(document.getElementById('rec-count').value) || 5;
   const minDiscount = parseInt(document.getElementById('min-discount').value) || 40;
-  const wishlist    = document.getElementById('include-wishlist').checked;
+  const srcMap = {
+    'steam_featured': 'src-steam-featured',
+    'steam_wishlist': 'src-steam-wishlist',
+    'gog':            'src-gog',
+    'humble':         'src-humble',
+    'fanatical':      'src-fanatical',
+    'gmg':            'src-gmg',
+    'epic_deals':     'src-epic-deals',
+    'epic_free':      'src-epic-free',
+  };
+  const dealSources = Object.entries(srcMap)
+    .filter(([, id]) => document.getElementById(id)?.checked)
+    .map(([key]) => key)
+    .join(',');
   const maxNewMin   = parseInt(document.getElementById('max-new-minutes').value) || 60;
 
   const output     = document.getElementById('rec-output');
@@ -1331,8 +1369,8 @@ function getRecommendations() {
     mode:             activeMode,
     preferences:      document.getElementById('preferences').value.trim(),
     count,
-    min_discount:     minDiscount,
-    include_wishlist: wishlist,
+    min_discount:  minDiscount,
+    deal_sources:  dealSources,
     max_new_minutes:  maxNewMin,
   });
 

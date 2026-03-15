@@ -1,15 +1,13 @@
 """
-Steam sale data fetcher.
+Game sale data fetchers.
 
-Two sources, both require no additional API keys beyond what's already configured:
-
+Steam sources (no extra API key beyond what's configured):
 1. Featured specials — Steam's front-page highlighted deals (always available)
 2. Wishlist on sale  — user's wishlisted games that are currently discounted
                        (requires the Steam API key + user ID already set up)
 
-The wishlist source is far more valuable: these are games the user explicitly
-wants that happen to be on sale right now. We check batches of 20 at a time
-via appdetails to stay polite to Steam's servers.
+Non-Steam sources live in other_sales.py. The SaleGame dataclass is defined
+here so both modules share the same type.
 """
 
 import time
@@ -31,6 +29,7 @@ class SaleGame:
     discount_percent: int        # Discount percentage 0–100
     original_price_cents: int    # Original price in US cents (0 = unknown or free)
     sale_price_cents: int        # Current sale price in US cents
+    store: str = "Steam"         # Which store this deal is from
     from_wishlist: bool = False  # True if this game was found in the user's Steam wishlist
     genres: list[str] = field(default_factory=list)  # e.g. ["Action", "RPG"]
 
@@ -226,72 +225,92 @@ def get_wishlist_on_sale(
 
 # ── Combined helper ────────────────────────────────────────────────────────────
 
+_ALL_SOURCES = {"steam_featured", "steam_wishlist", "gog", "humble", "fanatical", "gmg", "epic_deals", "epic_free"}
+
+
 def get_all_sales(
     min_discount: int = 40,
     steam_api_key: Optional[str] = None,
     steam_user_id: Optional[str] = None,
-    include_wishlist: bool = True,
+    sources: Optional[set[str]] = None,
     owned_app_ids: Optional[set[str]] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> list[SaleGame]:
-    """Fetch and merge Steam featured specials with the user's wishlist on sale.
+    """Fetch and merge game deals from all requested sources.
 
-    Merging strategy:
-      - Wishlist items come first (they are pre-selected by the user, so they're
-        more personally relevant than algorithmically featured deals).
-      - Within each group, items are already sorted by discount descending.
-      - After merging, duplicates (same app_id in both sources) are removed,
-        keeping the first occurrence — which is the wishlist version if present.
-      - Owned games are excluded (already purchased, no point recommending).
-
-    Both sources are fetched inside try/except so a failure in one (e.g. Steam
-    store down, private wishlist) doesn't prevent the other from returning results.
+    Ordering: wishlist items first (personally selected), then Steam featured,
+    then third-party stores, then Epic free games. Within each group items are
+    sorted by discount descending. Duplicates are removed, keeping the first
+    (highest-priority) occurrence. Owned Steam games are excluded.
 
     Args:
-        min_discount: Minimum discount percentage passed to both sub-functions.
-        steam_api_key / steam_user_id: Required to fetch the wishlist source.
-        include_wishlist: Set False to skip wishlist entirely (e.g. user preference).
-        owned_app_ids: Set of app_id strings the user already owns; excluded from results.
-        progress_callback: Optional callable(status_message: str) for UI status text.
+        min_discount: Minimum discount percentage for Steam and CheapShark sources.
+        steam_api_key / steam_user_id: Required for the wishlist source.
+        sources: Which sources to query. Defaults to all available sources.
+                 Valid values: "steam_featured", "steam_wishlist", "gog",
+                 "humble", "fanatical", "gmg", "epic_deals", "epic_free".
+        owned_app_ids: Steam app IDs the user already owns; excluded from results.
+        progress_callback: Optional callable(status_message: str) for UI status.
 
     Returns:
-        Merged, deduplicated list with wishlist items first, then featured.
+        Merged, deduplicated list sorted by source priority then discount.
     """
-    # Treat None as empty set so membership tests always work
+    from game_recommender.other_sales import get_cheapshark_deals, get_epic_free_games
+
+    if sources is None:
+        sources = _ALL_SOURCES
     owned = owned_app_ids or set()
 
-    if progress_callback:
-        progress_callback("Fetching Steam featured deals…")
+    all_games: list[SaleGame] = []
 
-    # Source 1: Featured specials (always attempted, no credentials needed)
-    featured: list[SaleGame] = []
-    try:
-        # Filter out games the user already owns before merging
-        featured = [g for g in get_featured_specials(min_discount) if g.app_id not in owned]
-    except Exception:
-        pass  # Store API down or rate-limited — silently skip featured deals
-
-    # Source 2: Wishlist on sale (only if credentials are available)
-    wishlist: list[SaleGame] = []
-    if include_wishlist and steam_api_key and steam_user_id:
+    # ── Steam wishlist (most personally relevant → first) ────────────────────
+    if "steam_wishlist" in sources and steam_api_key and steam_user_id:
         if progress_callback:
-            progress_callback("Checking your wishlist for discounts…")
+            progress_callback("Checking your Steam wishlist for discounts…")
         try:
-            wishlist = [
+            all_games += [
                 g for g in get_wishlist_on_sale(steam_api_key, steam_user_id, min_discount)
                 if g.app_id not in owned
             ]
         except Exception:
-            pass  # Wishlist fetch failed (e.g. private profile) — fall back to featured only
+            pass
 
-    # Merge: wishlist first (higher personal relevance), then featured.
-    # The seen set ensures each app_id appears only once; the wishlist version
-    # is preserved over the featured version when both lists contain the same game.
-    seen: set[str] = set()
+    # ── Steam featured specials ───────────────────────────────────────────────
+    if "steam_featured" in sources:
+        if progress_callback:
+            progress_callback("Fetching Steam featured deals…")
+        try:
+            all_games += [g for g in get_featured_specials(min_discount) if g.app_id not in owned]
+        except Exception:
+            pass
+
+    # ── CheapShark stores (GOG, Humble, Fanatical, GMG, Epic deals) ──────────
+    _cs_map = {"gog": "7", "humble": "11", "fanatical": "13", "gmg": "35", "epic_deals": "25"}
+    cs_store_ids = [_cs_map[s] for s in sources if s in _cs_map]
+    if cs_store_ids:
+        if progress_callback:
+            progress_callback("Fetching deals from other stores…")
+        try:
+            all_games += get_cheapshark_deals(cs_store_ids, min_discount)
+        except Exception:
+            pass
+
+    # ── Epic free games ───────────────────────────────────────────────────────
+    if "epic_free" in sources:
+        if progress_callback:
+            progress_callback("Fetching Epic free games…")
+        try:
+            all_games += get_epic_free_games()
+        except Exception:
+            pass
+
+    # Deduplicate by (store, app_id) — first occurrence wins
+    seen: set[tuple[str, str]] = set()
     merged: list[SaleGame] = []
-    for game in wishlist + featured:
-        if game.app_id not in seen:
-            seen.add(game.app_id)
+    for game in all_games:
+        key = (game.store, game.app_id)
+        if key not in seen:
+            seen.add(key)
             merged.append(game)
 
     return merged

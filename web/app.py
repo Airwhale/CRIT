@@ -756,7 +756,7 @@ async def recommend(
     count: int = 5,                 # Number of recommendations to request
     # Sales mode options
     min_discount: int = 40,         # Minimum discount percentage to include
-    include_wishlist: bool = True,  # Whether to check the Steam wishlist
+    deal_sources: str = "",         # Comma-separated source keys; empty = all
     # Backlog mode options
     max_new_minutes: int = 60,      # Games with <= this many minutes are "unplayed"
     session_id: str | None = Cookie(default=None),
@@ -820,25 +820,31 @@ async def recommend(
         # ── Step 2: Mode-specific data gathering ──────────────────────────────
 
         if mode == "sales":
-            yield status("Fetching Steam featured deals…")
+            from game_recommender.steam_sales import _ALL_SOURCES
             steam_creds = session.get("steam", {})
-            # owned_ids lets get_all_sales filter out games the user already owns
             owned_ids = {g["app_id"] for g in games_raw if g.get("app_id")}
 
+            # Parse requested sources; default to all when none specified
+            sources = (
+                set(deal_sources.split(",")) & _ALL_SOURCES
+                if deal_sources
+                else _ALL_SOURCES
+            )
             has_steam_key = bool(steam_creds.get("api_key"))
-            if include_wishlist and steam_creds and has_steam_key:
-                yield status(
-                    "Checking your wishlist for discounts — up to 100 items, ~20 sec…"
-                )
+            # Wishlist needs credentials — silently drop it if unavailable
+            if "steam_wishlist" in sources and not has_steam_key:
+                sources = sources - {"steam_wishlist"}
+            if "steam_wishlist" in sources:
+                yield status("Checking your Steam wishlist — up to 100 items, ~20 sec…")
+            else:
+                yield status("Fetching deals…")
 
             try:
-                # Run the synchronous sale fetcher in a thread pool.
-                # Wishlist requires an API key; skip it silently if not available.
                 sale_games = await asyncio.to_thread(
                     _fetch_sales,
                     min_discount,
                     steam_creds,
-                    include_wishlist and has_steam_key,
+                    sources,
                     owned_ids,
                 )
             except Exception as e:
@@ -904,20 +910,16 @@ async def recommend(
 def _fetch_sales(
     min_discount: int,
     steam_creds: dict,
-    include_wishlist: bool,
+    sources: set[str],
     owned_ids: set[str],
 ) -> list:
-    """Wrapper around get_all_sales, extracting credentials from the session dict.
-
-    include_wishlist should already be False when no api_key is present;
-    get_all_sales also handles None api_key gracefully by skipping the wishlist.
-    """
+    """Wrapper around get_all_sales, extracting credentials from the session dict."""
     from game_recommender.steam_sales import get_all_sales
     return get_all_sales(
         min_discount=min_discount,
         steam_api_key=steam_creds.get("api_key"),
         steam_user_id=steam_creds.get("user_id"),
-        include_wishlist=include_wishlist,
+        sources=sources,
         owned_app_ids=owned_ids,
     )
 
@@ -954,11 +956,10 @@ def _build_sales_prompt(
         return line
 
     def _sale_line(s) -> str:
-        """Format one sale game, flagging wishlist items prominently."""
-        # The star emoji makes wishlist items visually distinct in Claude's response
-        tag = "⭐ WISHLIST" if s.from_wishlist else "🛒 FEATURED"
+        """Format one sale game, including store and flagging wishlist items."""
+        tag = "⭐ WISHLIST" if s.from_wishlist else "🛒"
         line = (
-            f"{tag}: {s.name} | {s.discount_percent}% OFF → {s.sale_price}"
+            f"{tag}: {s.name} [{s.store}] | {s.discount_percent}% OFF → {s.sale_price}"
             f" (was {s.original_price})"
         )
         if s.genres:
@@ -986,16 +987,16 @@ def _build_sales_prompt(
             '"wait for a better deal" situation.'
         )
 
-    return f"""You are a gaming deal advisor. Your job is to identify which current Steam sale games best match a player's taste.
+    return f"""You are a gaming deal advisor. Your job is to identify which current game deals best match a player's taste.
 
 **PLAYER'S LIBRARY (taste profile):**
 {library_lines}
 {prefs_section}
 
-**CURRENT STEAM DEALS (not yet owned):**
+**CURRENT DEALS (not yet owned, across multiple stores):**
 {sale_lines}
 
-From the deals listed above, recommend exactly {count} games this player should buy. Wishlist items are already ones they want \u2014 prioritise them if they match.
+From the deals listed above, recommend exactly {count} games this player should buy. Include the store name in each recommendation so the player knows where to get it. Wishlist items are already ones they want \u2014 prioritise them if they match.
 
 {format_instructions}
 
