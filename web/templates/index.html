@@ -833,7 +833,7 @@ async function loadLibrary() {
   const content = document.getElementById('library-content');
   const errDiv = document.getElementById('library-errors');
 
-  loadArea.innerHTML = '<span class="spinner"></span> Loading your library…<br><small style="color:var(--muted);margin-top:4px;display:block;">Fetching games and RAWG ratings — this can take 30–60 seconds for large libraries.</small>';
+  loadArea.innerHTML = '<span class="spinner"></span> Loading your library…<br><small style="color:var(--muted);margin-top:4px;display:block;">Fetching games and RAWG ratings — large libraries (800+ games) can take several minutes. Use the limit input above to cap enrichment and speed things up.</small>';
   content.setAttribute('hidden', '');
   errDiv.innerHTML = '';
 
