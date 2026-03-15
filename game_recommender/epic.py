@@ -178,10 +178,20 @@ def get_epic_library(access_token: str) -> list[Game]:
         # Skipping records with no metadata.title filters out all those noise
         # entries while keeping every actual purchasable / free game.
         metadata = r.get("metadata") or {}
-        title = metadata.get("title", "").strip()
+        raw_title = metadata.get("title")
 
-        # Skip entries with no real title or duplicates
-        if not title or title in seen:
+        # Fall back to appName, then catalogId only when the field is absent (None),
+        # not when it is present but blank — a blank string signals an explicitly
+        # cleared/invalid title and should not trigger a fallback.
+        if raw_title is None:
+            raw_title = r.get("appName")
+        if raw_title is None:
+            raw_title = r.get("catalogId")
+
+        title = (raw_title or "").strip()
+
+        # Skip entries with no title, 32-char all-alphanumeric internal IDs, or duplicates
+        if not title or (len(title) == 32 and title.isalnum()) or title in seen:
             continue
 
         seen.add(title)
