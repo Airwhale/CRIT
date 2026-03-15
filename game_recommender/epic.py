@@ -149,8 +149,14 @@ def get_epic_library(access_token: str) -> list[Game]:
     """
     # Use a persistent session so the Authorization header is sent on every
     # paginated request without repeating it in every call.
+    # The User-Agent must identify as the Epic Games Launcher — the library
+    # service returns empty metadata (or rejects the request entirely) for
+    # clients that don't send a recognised launcher user-agent string.
     session = requests.Session()
-    session.headers["Authorization"] = f"Bearer {access_token}"
+    session.headers.update({
+        "Authorization": f"Bearer {access_token}",
+        "User-Agent": "EpicGamesLauncher/14.0.8-22004860 Windows/10.0.19041.1.256.64bit",
+    })
 
     records = []   # Accumulate raw records from all pages before processing
     cursor = None  # Start without a cursor (first page)
@@ -170,8 +176,11 @@ def get_epic_library(access_token: str) -> list[Game]:
         # case data.get("records", []) returns None rather than the default.
         records.extend(data.get("records") or [])
 
-        # Extract next cursor; an empty string or missing key both stop pagination
-        cursor = data.get("responseMetadata", {}).get("nextCursor")
+        # Extract next cursor; an empty string or missing key both stop pagination.
+        # Use `or {}` in case responseMetadata is present but null — the default
+        # in .get("responseMetadata", {}) only fires when the key is absent, not
+        # when its value is explicitly null.
+        cursor = (data.get("responseMetadata") or {}).get("nextCursor")
         if not cursor:
             break
 

@@ -104,7 +104,7 @@ The test suite covers every module with both success and failure scenarios, plus
 python -m pytest tests/ -v
 ```
 
-Expected output: **170 tests, 0 failures.**
+Expected output: **173 tests, 0 failures.**
 
 ### Test layout
 
@@ -112,8 +112,8 @@ Expected output: **170 tests, 0 failures.**
 tests/
 ├── conftest.py          — shared fixtures: fake Claude stream, FAKE_GAMES, SSE parser
 ├── test_steam.py        — Steam library fetch (20 tests)
-├── test_epic.py         — Epic OAuth + library (21 tests)
-├── test_gog.py          — GOG OAuth + library (25 tests)
+├── test_epic.py         — Epic OAuth + library (23 tests)
+├── test_gog.py          — GOG OAuth + library (26 tests)
 ├── test_ratings.py      — RAWG ratings + enrich_games (22 tests)
 ├── test_steam_sales.py  — featured specials, wishlist, get_all_sales (33 tests)
 └── test_web_api.py      — FastAPI endpoints end-to-end (47 tests)
@@ -124,7 +124,7 @@ tests/
 | Module | Success paths | Failure paths | Corner cases |
 |---|---|---|---|
 | Steam | Sorted results, field mapping, fallback names, `last_played=0→None`, env-var creds | Missing/empty key or ID, private profile, HTTP 401/403, timeout, connection error | Equal-playtime sort stability, `name=""` passthrough, very large playtime, `playtime_hours` rounding |
-| Epic | Token exchange & refresh (with and without `redirect_uri`), single/paginated library, dedup, 32-char ID skip, `release_year` from ISO date | Bad auth code, expired refresh token, HTTP error on library | Empty-string cursor stops pagination, 31-char alphanumeric not filtered, cross-page dedup, `records: null` returns empty list |
+| Epic | Token exchange & refresh (with and without `redirect_uri`), single/paginated library, dedup, 32-char ID skip, `release_year` from ISO date, Epic launcher `User-Agent` sent | Bad auth code, expired refresh token, HTTP error on library | Empty-string cursor stops pagination, 31-char alphanumeric not filtered, cross-page dedup, `records: null` returns empty list, `responseMetadata: null` does not crash |
 | GOG | Token exchange & refresh, single/paginated library, alphabetical sort, blank-title skip, `release_year` from unix timestamp, `gog_rating` from community score | Bad code, expired token, HTTP / network error | `totalPages=0` makes one request, `title: null` skipped, `products: null` returns empty list, `id=0` stored as `"0"`, zero rating → `None`, missing date → `None` |
 | Ratings | Full `GameRating` fields, `None` on no results, case-insensitive cache, tags capped at 10, progress callback | Missing API key, HTTP error, network error | Minimal result (sparse fields), <10 tags all returned, `delay=0` valid, per-name cache isolation |
 | Steam sales | Discount filter, sort, price formatting, wishlist date ordering, `max_check` cap, `get_all_sales` merge / wishlist-first / dedup / owned-game filter | HTTP errors, failed appdetails batch skipped, featured/wishlist errors handled gracefully | `discount == min_discount` included (strict `<`), `min_discount=0`, price `0` → `"unknown"`/`"free"`, `id=0` kept, wishlist version wins dedup, `owned_app_ids=None` |

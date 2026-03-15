@@ -363,3 +363,41 @@ class TestGetEpicLibraryCornerCases:
 
         assert len(games) == 1
         assert games[0].name == "Same Game"
+
+    def test_epic_launcher_user_agent_sent(self):
+        """The library request must include the Epic Games Launcher User-Agent.
+
+        Epic's library service returns empty metadata (causing 0 games) for
+        clients that do not identify as the launcher.
+        """
+        resp = self._resp([{"appName": "A", "catalogId": "a", "metadata": {"title": "Alpha"}}])
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(resp)
+            MockSession.return_value = s
+            get_epic_library("tok_xyz")
+
+        # The implementation calls session.headers.update({...}), so inspect that call
+        update_kwargs = s.headers.update.call_args[0][0]
+        assert "User-Agent" in update_kwargs
+        assert "EpicGamesLauncher" in update_kwargs["User-Agent"]
+
+    def test_response_metadata_null_does_not_crash(self):
+        """responseMetadata: null must not raise AttributeError.
+
+        data.get("responseMetadata", {}) returns None when the key is present
+        but explicitly null — only the `or {}` form handles this correctly.
+        """
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {
+            "records": [{"appName": "A", "catalogId": "a", "metadata": {"title": "Alpha"}}],
+            "responseMetadata": None,   # null, not absent
+        }
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = MagicMock()
+            s.get.return_value = resp
+            MockSession.return_value = s
+            games = get_epic_library("tok")
+
+        assert len(games) == 1   # game was returned
+        assert s.get.call_count == 1   # loop exited cleanly (cursor was None)
