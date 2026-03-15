@@ -748,7 +748,7 @@ async def recommend(
         raise HTTPException(400, "preferences must be 500 characters or fewer")
 
     # Clamp count silently rather than erroring — improves UX for edge inputs
-    count = max(1, min(count, 10))
+    count = max(1, min(count, 25))
 
     async def event_stream():
         """Async generator that yields SSE-formatted data lines."""
@@ -935,14 +935,14 @@ def _build_sales_prompt(
 
 From the deals listed above, recommend exactly {count} games this player should buy. Wishlist items are already ones they want — prioritise them if they match.
 
-For each recommendation:
+{"For each, use this compact format:\\n\\n**N. Game Name** — *XX% off → $Y.YY* — One sentence on why they should buy it.\\n\\nNo other commentary. Just the numbered list." if count > 10 else """For each recommendation:
 
 1. **Game Name** — *XX% off → $Y.YY (was $Z.ZZ)*
    - **Why it fits:** 2–3 sentences connecting it to their library history
    - **Genre match:** Which games they've played it's most similar to
    - **Deal quality:** Is this a historically good discount or just okay?
 
-End with a one-sentence verdict on whether this is a great sale or a "wait for a better deal" situation.
+End with a one-sentence verdict on whether this is a great sale or a "wait for a better deal" situation."""}
 
 Only recommend games from the deals list above."""
 
@@ -997,14 +997,14 @@ def _build_new_game_prompt(
 
 Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.
 
-For each recommendation:
+{"For each, use this compact format:\\n\\n**N. Game Name** (Platform) — One sentence on why they should play it.\\n\\nNo other commentary. Just the numbered list." if count > 10 else """For each recommendation:
 
 1. **Game Name** (Platform)
    - **Why start now:** 2–3 sentences connecting it to games they already love
    - **What to expect:** Tone, pacing, length — so they can set expectations
    - **Best entry point:** Any tip for the first 30 minutes to hook them
 
-End with a sentence about the hidden gem in the list — the one they'd least expect to love but probably will.
+End with a sentence about the hidden gem in the list — the one they'd least expect to love but probably will."""}
 
 Only recommend games from the unplayed list above."""
 
@@ -1036,6 +1036,23 @@ def _build_prompt(games: list[dict], preferences: str, count: int) -> str:
     unplayed = len(games) - played
     prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
 
+    if count > 10:
+        format_instructions = f"""List exactly {count} games. For each, use this compact format:
+
+**N. Game Name** (Platform) — One sentence on why they should play it.
+
+No other commentary. Just the numbered list."""
+    else:
+        format_instructions = f"""Recommend exactly {count} games from their library. For each:
+
+1. **Game Name** (Platform) — *[X hours played / unplayed]*
+   - **Why now:** 2-3 sentences tailored to their history
+   - **Ratings:** Mention scores with context
+   - **Best for:** Session type (quick burst / long session / chill evening / etc.)
+   - **Similar to:** Other games in their library they've played
+
+End with a 2-3 sentence insight about patterns in their gaming taste."""
+
     return f"""You are a knowledgeable gaming advisor helping a player decide what to play next from their existing library.
 
 Here is the player's game library with playtime and ratings:
@@ -1044,14 +1061,6 @@ Here is the player's game library with playtime and ratings:
 
 **Library stats:** {len(games)} total | {played} played | {unplayed} unplayed{prefs_section}
 
-Recommend exactly {count} games from their library. For each:
+{format_instructions}
 
-1. **Game Name** (Platform) — *[X hours played / unplayed]*
-   - **Why now:** 2-3 sentences tailored to their history
-   - **Ratings:** Mention scores with context
-   - **Best for:** Session type (quick burst / long session / chill evening / etc.)
-   - **Similar to:** Other games in their library they've played
-
-End with a 2-3 sentence insight about patterns in their gaming taste.
-
-Be specific, enthusiastic, and grounded in their actual library. Only recommend games listed above."""
+Be specific and grounded in their actual library. Only recommend games listed above."""
