@@ -565,14 +565,9 @@ async def get_library(
     # ── Optional RAWG enrichment ──────────────────────────────────────────────
     rawg_key = os.environ.get("RAWG_API_KEY")
     if not skip_ratings and rawg_key and all_games:
-        # Cap at 75 to keep the enrichment time reasonable (~20s at 0.25s/game)
-        to_enrich = all_games[:75]
         try:
-            enriched = await asyncio.to_thread(_enrich_with_rawg, to_enrich, rawg_key)
-            # Build a lookup by name, then reconstruct the full list in original order.
-            # Games beyond the top 75 stay as-is (no rating data added).
-            ratings_map = {g["name"]: g for g in enriched}
-            all_games = [ratings_map.get(g["name"], g) for g in all_games]
+            enriched = await asyncio.to_thread(_enrich_with_rawg, all_games, rawg_key)
+            all_games = enriched
         except Exception as e:
             # RAWG failure is non-fatal — games still display without ratings
             errors.append({"platform": "rawg", "error": str(e)})
@@ -680,23 +675,32 @@ def _game_to_dict(game) -> dict:
 def _enrich_with_rawg(games: list[dict], api_key: str) -> list[dict]:
     """Add RAWG rating data to a list of game dicts.
 
+    Uses a thread pool to fetch ratings concurrently (5 workers), which keeps
+    wall-clock time reasonable even for large libraries. Results are cached
+    in-process, so a second load of the same library is near-instant.
+
     Returns a new list of dicts with rawg_rating, metacritic, and genres
     fields filled in where RAWG found a match. Unmatched games keep None/[].
     """
     from game_recommender.ratings import get_game_rating
-    enriched = []
-    for game in games:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def fetch_one(game: dict) -> dict:
         rating = get_game_rating(game["name"], api_key=api_key)
         if rating:
-            # dict spread creates a new dict rather than mutating the original —
-            # safe even if the original dict is referenced elsewhere
-            game = {**game,
+            return {**game,
                 "rawg_rating": rating.rawg_rating,
                 "metacritic":  rating.metacritic_score,
                 "genres":      rating.genres,
             }
-        enriched.append(game)
-    return enriched
+        return game
+
+    results = [None] * len(games)
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        future_to_idx = {pool.submit(fetch_one, g): i for i, g in enumerate(games)}
+        for future in as_completed(future_to_idx):
+            results[future_to_idx[future]] = future.result()
+    return results
 
 
 # ── Recommendations (SSE) ─────────────────────────────────────────────────────
