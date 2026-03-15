@@ -583,7 +583,7 @@
 
 
   <!-- ── Step 2: Library ── -->
-  <div class="card" id="library-section" hidden>
+  <div class="card" id="library-section">
     <div class="section-header">
       <span class="step-num">2</span>
       <h2>Your Library</h2>
@@ -605,6 +605,13 @@
       <button class="load-library-btn" onclick="loadLibrary()">
         Load Library
       </button>
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-top:1rem;margin-bottom:0.25rem;">
+        <hr style="flex:1;border:none;border-top:1px solid var(--border);">
+        <span style="color:var(--muted);font-size:0.8rem;">or</span>
+        <hr style="flex:1;border:none;border-top:1px solid var(--border);">
+      </div>
+      <input type="file" id="csv-import-input-load" accept=".csv" style="display:none" onchange="importCSV(this)">
+      <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.85rem;padding:0.45rem 1rem;border-radius:var(--radius);cursor:pointer;" onclick="document.getElementById('csv-import-input-load').click()">⬆ Import CSV</button>
     </div>
 
     <div id="library-content" hidden>
@@ -1206,6 +1213,8 @@ function importCSV(input) {
       filterLibrary();
       document.getElementById('library-content').removeAttribute('hidden');
       document.getElementById('rec-section').removeAttribute('hidden');
+      document.getElementById('viz-section').removeAttribute('hidden');
+      renderGenreBubbles();
     } catch(err) {
       document.getElementById('library-errors').innerHTML =
         `<div class="notice error visible">CSV parse error: ${escHtml(err.message)}</div>`;
