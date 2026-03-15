@@ -529,6 +529,12 @@
       <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;">
         <input type="checkbox" id="skip-ratings"> Skip RAWG ratings (faster)
       </label>
+      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;margin-bottom:0.75rem;">
+        Enrich only top
+        <input type="number" id="rawg-limit" min="1" max="9999" step="10" placeholder="all"
+               style="width:70px;margin:0 4px;">
+        games with RAWG <small style="color:var(--muted);">(leave blank for all)</small>
+      </label>
       <button class="load-library-btn" onclick="loadLibrary()">
         Load Library
       </button>
@@ -821,6 +827,8 @@ async function disconnect(platform) {
 // ── Library ────────────────────────────────────────────────────────────────────
 async function loadLibrary() {
   const skipRatings = document.getElementById('skip-ratings').checked;
+  const rawgLimitVal = document.getElementById('rawg-limit').value.trim();
+  const rawgLimit    = rawgLimitVal ? parseInt(rawgLimitVal, 10) : null;
   const loadArea = document.getElementById('library-load-area');
   const content = document.getElementById('library-content');
   const errDiv = document.getElementById('library-errors');
@@ -830,7 +838,8 @@ async function loadLibrary() {
   errDiv.innerHTML = '';
 
   try {
-    const data = await apiFetch(`/api/library?skip_ratings=${skipRatings}`);
+    const params = `skip_ratings=${skipRatings}${rawgLimit !== null ? `&rawg_limit=${rawgLimit}` : ''}`;
+    const data = await apiFetch(`/api/library?${params}`);
     allGames = data.games || [];
 
     // Reset all filter controls to a clean state so every load starts fresh.

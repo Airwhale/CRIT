@@ -514,6 +514,7 @@ async def disconnect(platform: str, session_id: str | None = Cookie(default=None
 @app.get("/api/library")
 async def get_library(
     skip_ratings: bool = False,
+    rawg_limit: int | None = None,
     session_id: str | None = Cookie(default=None),
 ):
     """Fetch and merge game libraries from all connected platforms.
@@ -522,9 +523,9 @@ async def get_library(
     A failure in one platform (e.g. expired token, private profile) is recorded
     in the "errors" list but doesn't prevent the other platforms from returning.
 
-    Post-fetch RAWG enrichment: by default every game is enriched. Set the
-    RAWG_ENRICHMENT_LIMIT environment variable to an integer to cap the number
-    of games enriched (useful on large libraries to reduce load time).
+    Post-fetch RAWG enrichment: by default every game is enriched. Pass
+    rawg_limit=N to cap enrichment to the top N games by playtime (useful
+    on large libraries to reduce load time).
 
     Returns:
         {"games": [...], "errors": [...]}
@@ -567,11 +568,9 @@ async def get_library(
     rawg_key = os.environ.get("RAWG_API_KEY")
     if not skip_ratings and rawg_key and all_games:
         try:
-            _limit_str = os.environ.get("RAWG_ENRICHMENT_LIMIT", "").strip()
-            limit = int(_limit_str) if _limit_str.isdigit() else None
-            to_enrich = all_games[:limit] if limit is not None else all_games
+            to_enrich = all_games[:rawg_limit] if rawg_limit is not None else all_games
             enriched = await asyncio.to_thread(_enrich_with_rawg, to_enrich, rawg_key)
-            all_games = enriched + (all_games[limit:] if limit is not None else [])
+            all_games = enriched + (all_games[rawg_limit:] if rawg_limit is not None else [])
         except Exception as e:
             # RAWG failure is non-fatal — games still display without ratings
             errors.append({"platform": "rawg", "error": str(e)})
