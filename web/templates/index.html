@@ -1448,7 +1448,7 @@ function getRecommendations() {
       return `
       <tr>
         <td>${d.wishlist ? '<span class="wishlist-star" title="On your wishlist">★</span>' : ''}</td>
-        <td>${escHtml(d.name)}</td>
+        <td>${d.url ? `<a href="${escHtml(d.url)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline dotted;">${escHtml(d.name)}</a>` : escHtml(d.name)}</td>
         <td>${escHtml(d.store)}</td>
         <td class="col-discount">${d.discount}%</td>
         <td class="col-sale">${escHtml(d.sale)}</td>
