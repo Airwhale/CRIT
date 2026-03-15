@@ -420,6 +420,41 @@
 
   /* hidden helper */
   [hidden] { display: none !important; }
+
+  /* ── Genre Bubble Chart ── */
+  .viz-section-header {
+    cursor: pointer;
+    user-select: none;
+  }
+  .viz-section-header:hover h2 { color: var(--accent2); }
+
+  #genre-bubbles {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 1.25rem 1rem 1.5rem;
+    min-height: 100px;
+  }
+  .genre-bubble {
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 8px;
+    box-sizing: border-box;
+    line-height: 1.25;
+    cursor: default;
+    transition: transform 0.15s ease, filter 0.15s ease;
+  }
+  .genre-bubble:hover { transform: scale(1.1); filter: brightness(1.25); }
+  .bubble-name { font-weight: 700; word-break: break-word; hyphens: auto; }
+  .bubble-count { opacity: 0.75; font-size: 0.82em; margin-top: 2px; }
+  #viz-toggle-icon { margin-left: auto; color: var(--muted); font-size: 0.82rem; font-weight: 400; }
+  #viz-empty { color: var(--muted); font-size: 0.85rem; padding: 1rem; text-align: center; }
 </style>
 </head>
 <body>
@@ -678,6 +713,20 @@
     </div>
   </div><!-- step 3 card -->
 
+  <!-- ── Genre Bubble Chart ─────────────────────────────────────────────────── -->
+  <div class="card" id="viz-section" hidden>
+    <div class="section-header viz-section-header" onclick="toggleViz()">
+      <span class="step-num" style="background:var(--bg3);color:var(--accent2);font-size:1rem;">◈</span>
+      <h2>Library Insights</h2>
+      <span id="viz-toggle-icon">▲ Hide</span>
+    </div>
+    <div id="viz-body">
+      <p style="color:var(--muted);font-size:0.82rem;margin:0 0 0 1rem;">Genres across your library — bubble size reflects number of games.</p>
+      <div id="genre-bubbles"></div>
+      <div id="viz-empty" hidden>No genre data available — try loading your library with RAWG ratings enabled.</div>
+    </div>
+  </div><!-- viz card -->
+
 </main>
 
 <script>
@@ -893,6 +942,8 @@ async function loadLibrary() {
 
     content.removeAttribute('hidden');
     document.getElementById('rec-section').removeAttribute('hidden');
+    document.getElementById('viz-section').removeAttribute('hidden');
+    renderGenreBubbles();
 
     loadArea.innerHTML = `
       <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;">
@@ -1315,6 +1366,72 @@ function getRecommendations() {
       content.innerHTML = '<div class="notice error visible">Connection error. Make sure ANTHROPIC_API_KEY is set in your .env file.</div>';
     }
   };
+}
+
+// ── Genre Bubble Chart ──────────────────────────────────────────────────────────
+const BUBBLE_COLORS = [
+  '#7c6aff','#34d399','#fbbf24','#f87171','#a78bfa',
+  '#60a5fa','#f472b6','#fb923c','#4ade80','#38bdf8',
+];
+
+function renderGenreBubbles() {
+  const container = document.getElementById('genre-bubbles');
+  const emptyMsg  = document.getElementById('viz-empty');
+  container.innerHTML = '';
+
+  // Tally genres (and total playtime per genre)
+  const count    = {};
+  const playtime = {};
+  for (const g of allGames) {
+    for (const genre of (g.genres || [])) {
+      count[genre]    = (count[genre]    || 0) + 1;
+      playtime[genre] = (playtime[genre] || 0) + (g.playtime_minutes || 0);
+    }
+  }
+
+  const entries = Object.entries(count).sort((a, b) => b[1] - a[1]).slice(0, 30);
+
+  if (entries.length === 0) {
+    emptyMsg.removeAttribute('hidden');
+    return;
+  }
+  emptyMsg.setAttribute('hidden', '');
+
+  const maxCount = entries[0][1];
+
+  entries.forEach(([name, cnt], i) => {
+    const frac  = Math.sqrt(cnt / maxCount);
+    const size  = Math.round(56 + frac * 124); // 56 – 180 px
+    const fs    = Math.max(9, Math.round(9 + frac * 9));
+    const color = BUBBLE_COLORS[i % BUBBLE_COLORS.length];
+    const hrs   = Math.round((playtime[name] || 0) / 60);
+
+    const el = document.createElement('div');
+    el.className = 'genre-bubble';
+    el.style.cssText =
+      `width:${size}px;height:${size}px;` +
+      `background:${color}1a;border:2px solid ${color}55;` +
+      `color:${color};font-size:${fs}px;`;
+    el.title = `${name}: ${cnt} game${cnt !== 1 ? 's' : ''}` +
+               (hrs > 0 ? `, ${hrs}h played` : '');
+    el.innerHTML =
+      `<span class="bubble-name">${escHtml(name)}</span>` +
+      `<span class="bubble-count">${cnt}</span>`;
+    container.appendChild(el);
+  });
+}
+
+function toggleViz() {
+  const body = document.getElementById('viz-body');
+  const icon = document.getElementById('viz-toggle-icon');
+  const isHidden = body.hasAttribute('hidden');
+  if (isHidden) {
+    body.removeAttribute('hidden');
+    icon.textContent = '▲ Hide';
+  } else {
+    body.setAttribute('hidden', '');
+    icon.textContent = '▼ Show';
+  }
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
