@@ -587,8 +587,8 @@ class TestGetGamesViaAssets:
 
         assert games == []
 
-    def test_catalog_error_skips_namespace(self):
-        """A catalog HTTP error for one namespace is swallowed; other namespaces proceed."""
+    def test_catalog_error_skips_namespace_when_others_succeed(self):
+        """A catalog HTTP error for one namespace is skipped; other namespaces still return games."""
         assets = _assets_resp([
             {"namespace": "bad_ns",  "catalogItemId": "x", "appName": "a"},
             {"namespace": "good_ns", "catalogItemId": "y", "appName": "b"},
@@ -604,6 +604,42 @@ class TestGetGamesViaAssets:
 
         assert len(games) == 1
         assert games[0].name == "Good Game"
+
+    def test_all_catalog_errors_raises(self):
+        """If assets exist but every catalog request fails, raise HTTPError.
+
+        Silently returning [] when the catalog API is rejecting all requests
+        (e.g. token scope / 403) makes the bug invisible.  Raising surfaces it
+        in the UI errors list so the user sees a meaningful message.
+        """
+        assets = _assets_resp([
+            {"namespace": "ns1", "catalogItemId": "x", "appName": "a"},
+        ])
+        bad_catalog = MagicMock()
+        bad_catalog.raise_for_status.side_effect = req_lib.HTTPError("403")
+
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets, bad_catalog)
+            MockSession.return_value = s
+            with pytest.raises(req_lib.HTTPError):
+                _get_games_via_assets(s)
+
+    def test_assets_request_includes_label_live(self):
+        """Assets endpoint must be called with ?label=Live (matches Legendary's behaviour).
+
+        Without label=Live the endpoint may return pre-release or dev build assets
+        instead of the user's live library.
+        """
+        assets = _assets_resp([{"namespace": "ns1", "catalogItemId": "a", "appName": "x"}])
+        catalog = _catalog_resp({"a": {"title": "Game", "releaseInfo": []}})
+
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets, catalog)
+            MockSession.return_value = s
+            _get_games_via_assets(s)
+
+        assets_call_kwargs = s.get.call_args_list[0][1]
+        assert assets_call_kwargs.get("params", {}).get("label") == "Live"
 
     def test_result_sorted_alphabetically(self):
         """Games from the assets fallback are sorted alphabetically."""

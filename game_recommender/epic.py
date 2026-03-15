@@ -180,7 +180,9 @@ def _get_games_via_assets(session: requests.Session) -> list[Game]:
     Returns:
         List of Game objects sorted alphabetically.
     """
-    resp = session.get(_ASSETS_URL, timeout=15)
+    # label=Live filters to production assets only (matches Legendary's behaviour).
+    # Without this parameter the endpoint may return pre-release or dev builds.
+    resp = session.get(_ASSETS_URL, params={"label": "Live"}, timeout=15)
     resp.raise_for_status()
     # v1 endpoint returns a flat JSON array, not {"assets": [...]}.
     raw = resp.json()
@@ -199,6 +201,7 @@ def _get_games_via_assets(session: requests.Session) -> list[Game]:
 
     games: list[Game] = []
     seen:  set[str]   = set()
+    catalog_errors: list[str] = []  # collect failures so we can surface them
 
     for ns, items in by_ns.items():
         # Catalog API accepts up to ~20 IDs per request; batch accordingly.
@@ -220,9 +223,9 @@ def _get_games_via_assets(session: requests.Session) -> list[Game]:
                 cr.raise_for_status()
                 catalog = cr.json()
             except requests.HTTPError as exc:
-                logger.debug(
-                    "Epic catalog lookup failed for namespace %r: %s", ns, exc
-                )
+                msg = f"namespace {ns!r}: {exc}"
+                logger.warning("Epic catalog lookup failed — %s", msg)
+                catalog_errors.append(msg)
                 continue
 
             for cid, _ in batch:
@@ -247,6 +250,16 @@ def _get_games_via_assets(session: requests.Session) -> list[Game]:
                 ))
 
     logger.debug("Epic assets fallback produced %d games", len(games))
+
+    # If we had assets to look up but every catalog request failed, surface the
+    # error rather than silently returning an empty list.  This makes token-scope
+    # or endpoint problems visible in the UI instead of masking them as "no games".
+    if not games and catalog_errors:
+        raise requests.HTTPError(
+            f"Epic catalog API failed for all namespaces. "
+            f"First error: {catalog_errors[0]}"
+        )
+
     return sorted(games, key=lambda g: g.name.lower())
 
 
