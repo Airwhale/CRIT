@@ -308,3 +308,12 @@ class TestGogLibraryNewFields:
             games = get_gog_library("tok")
 
         assert games[0].gog_rating is None
+
+    def test_gog_rating_dict_gives_none(self):
+        """The real GOG API sometimes returns rating as a dict — should not crash."""
+        resp = _products_resp([{"id": 1, "title": "Dict Rating Game",
+                                "rating": {"value": 42, "count": 100}}])
+        with patch("game_recommender.gog.requests.get", return_value=resp):
+            games = get_gog_library("tok")
+
+        assert games[0].gog_rating is None

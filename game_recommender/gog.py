@@ -125,7 +125,6 @@ def get_gog_library(access_token: str) -> list[Game]:
     Raises:
         requests.HTTPError: On authentication failure or API error.
         requests.ConnectionError / requests.Timeout: On network failure.
-        TypeError: If the API returns null for the "products" field.
     """
     # Include the bearer token in every request for this library fetch
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -158,9 +157,15 @@ def get_gog_library(access_token: str) -> list[Game]:
             except (OSError, OverflowError, ValueError):
                 release_year = None
 
-            # Community rating (0.0 or missing → None so we can distinguish "unrated" from 0)
+            # Community rating (0.0 or missing → None so we can distinguish "unrated" from 0).
+            # The GOG API may return rating as a plain number *or* as a dict such as
+            # {"value": 42, "count": 1000}.  Only coerce when we actually have a
+            # number; any other type (dict, list, str that can't convert) → None.
             raw_rating = product.get("rating")
-            gog_rating = float(raw_rating) if raw_rating else None
+            try:
+                gog_rating = float(raw_rating) if raw_rating else None
+            except (TypeError, ValueError):
+                gog_rating = None
 
             games.append(Game(
                 name=title,
