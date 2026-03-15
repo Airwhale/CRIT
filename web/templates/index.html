@@ -1501,6 +1501,7 @@ function getRecommendations() {
       btn.disabled = false;
       btn.innerHTML = '✨ Recommend';
       content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
+      linkifyGameNames();
       return;
     }
 
@@ -1567,6 +1568,7 @@ function getRecommendations() {
       if (!rawText) statusLine.hidden = true;
       rawText += msg.text;
       content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
+      linkifyGameNames();
       output.scrollTop = output.scrollHeight;
     }
   };
@@ -1581,6 +1583,21 @@ function getRecommendations() {
       content.innerHTML = '<div class="notice error visible">Connection error. Make sure ANTHROPIC_API_KEY is set in your .env file.</div>';
     }
   };
+}
+
+// ── Link game names in rec output to Steam search ───────────────────────────────
+function linkifyGameNames() {
+  document.querySelectorAll('#rec-content strong').forEach(el => {
+    if (el.closest('a')) return;
+    const name = el.textContent.trim();
+    const a = document.createElement('a');
+    a.href = `https://store.steampowered.com/search/?term=${encodeURIComponent(name)}`;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.style.cssText = 'color:inherit;text-decoration:underline dotted;';
+    a.appendChild(el.cloneNode(true));
+    el.replaceWith(a);
+  });
 }
 
 // ── Genre Bubble Chart ──────────────────────────────────────────────────────────
