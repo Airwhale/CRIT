@@ -201,6 +201,7 @@
   }
   .library-toolbar input[type=search] { max-width: 200px; }
   .library-toolbar select { max-width: 130px; }
+  .platform-checkbox { display:inline-flex; align-items:center; gap:0.3rem; font-size:0.85rem; cursor:pointer; user-select:none; white-space:nowrap; }
   .library-toolbar .count-badge {
     margin-left: auto;
     font-size: 0.8rem;
@@ -437,12 +438,6 @@
                 </label>
                 <input type="text" id="steam-user-id" placeholder="7656119...">
               </div>
-              <div>
-                <label>API Key <span style="color:var(--border);font-weight:400;">(optional)</span>
-                  <a href="https://steamcommunity.com/dev/apikey" target="_blank" style="font-size:0.72rem;margin-left:4px;">(get one)</a>
-                </label>
-                <input type="password" id="steam-api-key" placeholder="32-char hex key — needed for wishlist deals">
-              </div>
               <div class="notice error" id="steam-error"></div>
               <button class="btn-platform btn-steam" id="steam-connect-btn" onclick="connectSteam()">
                 Connect Steam
@@ -450,22 +445,7 @@
             </div>
           </details>
         </div>
-        <!-- Connected without API key -->
-        <div id="steam-connected-basic" hidden>
-          <div class="notice success visible">✓ Steam connected</div>
-          <details style="margin-top:0.5rem;">
-            <summary style="font-size:0.8rem;color:var(--muted);cursor:pointer;user-select:none;">
-              Add API key to enable wishlist in Steam Deals
-            </summary>
-            <div style="margin-top:0.5rem;display:flex;gap:0.4rem;align-items:flex-start;">
-              <input type="password" id="steam-apikey-upgrade" placeholder="32-char hex key" style="flex:1;">
-              <button style="background:var(--steam);color:#fff;white-space:nowrap;padding:0.5rem 0.75rem;font-size:0.82rem;" onclick="saveApiKey()">Save</button>
-            </div>
-            <div class="notice error" id="steam-apikey-error" style="margin-top:4px;"></div>
-          </details>
-          <button class="btn-platform btn-disconnect" onclick="disconnect('steam')" style="margin-top:0.4rem;">Disconnect</button>
-        </div>
-        <!-- Connected with API key -->
+        <!-- Connected -->
         <div id="steam-connected-full" hidden>
           <div class="notice success visible">✓ Steam connected</div>
           <button class="btn-platform btn-disconnect" onclick="disconnect('steam')">Disconnect</button>
@@ -556,12 +536,9 @@
     <div id="library-content" hidden>
       <div class="library-toolbar">
         <input type="search" id="lib-search" placeholder="Search games…" oninput="filterLibrary()">
-        <select id="lib-platform-filter" onchange="filterLibrary()">
-          <option value="">All platforms</option>
-          <option value="steam">Steam</option>
-          <option value="epic">Epic</option>
-          <option value="gog">GOG</option>
-        </select>
+        <label class="platform-checkbox"><input type="checkbox" id="filter-steam" checked onchange="filterLibrary()"> Steam</label>
+        <label class="platform-checkbox"><input type="checkbox" id="filter-epic" checked onchange="filterLibrary()"> Epic</label>
+        <label class="platform-checkbox"><input type="checkbox" id="filter-gog" checked onchange="filterLibrary()"> GOG</label>
         <select id="lib-sort" onchange="sortLibrary()">
           <option value="playtime">Sort: Playtime</option>
           <option value="last_played">Sort: Last Played</option>
@@ -683,7 +660,7 @@ let filteredGames = [];    // after search/filter
 
   try {
     const status = await apiFetch('/api/status');
-    if (status.steam) markConnected('steam', status.steam_has_api_key);
+    if (status.steam) markConnected('steam');
     if (status.epic)  markConnected('epic');
     if (status.gog)   markConnected('gog');
     if (status.steam || status.epic || status.gog) {
@@ -735,15 +712,7 @@ function markConnected(platform, hasApiKey) {
   form.setAttribute('hidden', '');
 
   if (platform === 'steam') {
-    const basic = document.getElementById('steam-connected-basic');
-    const full  = document.getElementById('steam-connected-full');
-    if (hasApiKey) {
-      basic.setAttribute('hidden', '');
-      full.removeAttribute('hidden');
-    } else {
-      full.setAttribute('hidden', '');
-      basic.removeAttribute('hidden');
-    }
+    document.getElementById('steam-connected-full').removeAttribute('hidden');
   } else {
     document.getElementById(`${platform}-connected`).removeAttribute('hidden');
   }
@@ -760,7 +729,6 @@ function markDisconnected(platform) {
   form.removeAttribute('hidden');
 
   if (platform === 'steam') {
-    document.getElementById('steam-connected-basic').setAttribute('hidden', '');
     document.getElementById('steam-connected-full').setAttribute('hidden', '');
   } else {
     document.getElementById(`${platform}-connected`).setAttribute('hidden', '');
@@ -770,7 +738,6 @@ function markDisconnected(platform) {
 // ── Steam ──────────────────────────────────────────────────────────────────────
 async function connectSteam() {
   clearError('steam-error');
-  const apiKey = document.getElementById('steam-api-key').value.trim();
   const userId = document.getElementById('steam-user-id').value.trim();
   if (!userId) { showError('steam-error', 'Steam ID is required.'); return; }
 
@@ -781,33 +748,14 @@ async function connectSteam() {
     await apiFetch('/api/auth/steam', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: apiKey || null, user_id: userId }),
+      body: JSON.stringify({ user_id: userId }),
     });
-    markConnected('steam', !!apiKey);
+    markConnected('steam');
   } catch(e) {
     showError('steam-error', e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Connect Steam';
-  }
-}
-
-async function saveApiKey() {
-  clearError('steam-apikey-error');
-  const apiKey = document.getElementById('steam-apikey-upgrade').value.trim();
-  if (!apiKey) { showError('steam-apikey-error', 'Enter your API key first.'); return; }
-  try {
-    await apiFetch('/api/auth/steam/apikey', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: apiKey }),
-    });
-    // Upgrade the connected display to "full" (with API key)
-    document.getElementById('steam-connected-basic').setAttribute('hidden', '');
-    document.getElementById('steam-connected-full').removeAttribute('hidden');
-    showToast('✓ Steam API key saved — wishlist deals enabled!', 'success');
-  } catch(e) {
-    showError('steam-apikey-error', e.message);
   }
 }
 
@@ -944,11 +892,13 @@ function renderLibraryTable(games) {
 
 function filterLibrary() {
   const query = document.getElementById('lib-search').value.toLowerCase();
-  const platform = document.getElementById('lib-platform-filter').value;
+  const knownPlatforms = ['steam', 'epic', 'gog'];
+  const checked = new Set(knownPlatforms.filter(p => document.getElementById(`filter-${p}`).checked));
 
   filteredGames = allGames.filter(g => {
     const matchesSearch = !query || g.name.toLowerCase().includes(query);
-    const matchesPlatform = !platform || g.platform === platform;
+    // Unknown platforms (e.g. "other") are always shown; known ones respect the checkboxes
+    const matchesPlatform = !knownPlatforms.includes(g.platform) || checked.has(g.platform);
     return matchesSearch && matchesPlatform;
   });
 

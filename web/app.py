@@ -294,7 +294,7 @@ async def get_status(session_id: str | None = Cookie(default=None)):
     steam_creds = session.get("steam")
     return {
         "steam":             bool(steam_creds),
-        "steam_has_api_key": bool(steam_creds and steam_creds.get("api_key")),
+        "steam_has_api_key": bool(steam_creds and (steam_creds.get("api_key") or os.environ.get("STEAM_API_KEY"))),
         "epic":              "epic" in session,
         "gog":               "gog"  in session,
     }
@@ -566,8 +566,8 @@ async def get_library(
     rawg_key = os.environ.get("RAWG_API_KEY")
     if not skip_ratings and rawg_key and all_games:
         try:
-            enriched = await asyncio.to_thread(_enrich_with_rawg, all_games, rawg_key)
-            all_games = enriched
+            enriched = await asyncio.to_thread(_enrich_with_rawg, all_games[:75], rawg_key)
+            all_games = enriched + all_games[75:]
         except Exception as e:
             # RAWG failure is non-fatal — games still display without ratings
             errors.append({"platform": "rawg", "error": str(e)})
@@ -927,6 +927,23 @@ def _build_sales_prompt(
     sale_lines    = "\n".join(_sale_line(s) for s in sale_games[:50])
     prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
 
+    if count > 10:
+        format_instructions = (
+            "For each, use this compact format:\n\n"
+            "**N. Game Name** — *XX% off → $Y.YY* — One sentence on why they should buy it.\n\n"
+            "No other commentary. Just the numbered list."
+        )
+    else:
+        format_instructions = (
+            "For each recommendation:\n\n"
+            "1. **Game Name** — *XX% off → $Y.YY (was $Z.ZZ)*\n"
+            "   - **Why it fits:** 2\u20133 sentences connecting it to their library history\n"
+            "   - **Genre match:** Which games they've played it's most similar to\n"
+            "   - **Deal quality:** Is this a historically good discount or just okay?\n\n"
+            "End with a one-sentence verdict on whether this is a great sale or a "
+            '"wait for a better deal" situation.'
+        )
+
     return f"""You are a gaming deal advisor. Your job is to identify which current Steam sale games best match a player's taste.
 
 **PLAYER'S LIBRARY (taste profile):**
@@ -936,16 +953,9 @@ def _build_sales_prompt(
 **CURRENT STEAM DEALS (not yet owned):**
 {sale_lines}
 
-From the deals listed above, recommend exactly {count} games this player should buy. Wishlist items are already ones they want — prioritise them if they match.
+From the deals listed above, recommend exactly {count} games this player should buy. Wishlist items are already ones they want \u2014 prioritise them if they match.
 
-{"For each, use this compact format:\\n\\n**N. Game Name** — *XX% off → $Y.YY* — One sentence on why they should buy it.\\n\\nNo other commentary. Just the numbered list." if count > 10 else """For each recommendation:
-
-1. **Game Name** — *XX% off → $Y.YY (was $Z.ZZ)*
-   - **Why it fits:** 2–3 sentences connecting it to their library history
-   - **Genre match:** Which games they've played it's most similar to
-   - **Deal quality:** Is this a historically good discount or just okay?
-
-End with a one-sentence verdict on whether this is a great sale or a "wait for a better deal" situation."""}
+{format_instructions}
 
 Only recommend games from the deals list above."""
 
@@ -989,6 +999,23 @@ def _build_new_game_prompt(
     unplayed_lines = "\n".join(_unplayed_line(g) for g in unplayed[:80])
     prefs_section  = f"\n\n**Player's current mood:** {preferences}" if preferences else ""
 
+    if count > 10:
+        format_instructions = (
+            "For each, use this compact format:\n\n"
+            "**N. Game Name** (Platform) \u2014 One sentence on why they should play it.\n\n"
+            "No other commentary. Just the numbered list."
+        )
+    else:
+        format_instructions = (
+            "For each recommendation:\n\n"
+            "1. **Game Name** (Platform)\n"
+            "   - **Why start now:** 2\u20133 sentences connecting it to games they already love\n"
+            "   - **What to expect:** Tone, pacing, length \u2014 so they can set expectations\n"
+            "   - **Best entry point:** Any tip for the first 30 minutes to hook them\n\n"
+            "End with a sentence about the hidden gem in the list \u2014 "
+            "the one they'd least expect to love but probably will."
+        )
+
     return f"""You are a gaming advisor helping a player explore their backlog.
 
 **GAMES THEY'VE PLAYED (their taste profile):**
@@ -1000,14 +1027,7 @@ def _build_new_game_prompt(
 
 Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.
 
-{"For each, use this compact format:\\n\\n**N. Game Name** (Platform) — One sentence on why they should play it.\\n\\nNo other commentary. Just the numbered list." if count > 10 else """For each recommendation:
-
-1. **Game Name** (Platform)
-   - **Why start now:** 2–3 sentences connecting it to games they already love
-   - **What to expect:** Tone, pacing, length — so they can set expectations
-   - **Best entry point:** Any tip for the first 30 minutes to hook them
-
-End with a sentence about the hidden gem in the list — the one they'd least expect to love but probably will."""}
+{format_instructions}
 
 Only recommend games from the unplayed list above."""
 

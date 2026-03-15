@@ -178,11 +178,6 @@ class TestSteamAuth:
         # TestClient surfaces cookies from Set-Cookie headers in resp.cookies
         assert "session_id" in resp.cookies
 
-    def test_failure_missing_api_key_returns_400(self, client):
-        """Request body without api_key is rejected before any Steam call."""
-        resp = client.post("/api/auth/steam", json={"user_id": "123"})
-        assert resp.status_code == 400
-
     def test_failure_missing_user_id_returns_400(self, client):
         """Request body without user_id is rejected before any Steam call."""
         resp = client.post("/api/auth/steam", json={"api_key": "key"})
@@ -613,15 +608,6 @@ class TestSteamAuthCornerCases:
         mock_cm.__aenter__ = AsyncMock(return_value=mock_inner)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         return mock_cm
-
-    def test_whitespace_only_api_key_returns_400(self, client):
-        """`"   ".strip()` == '' → treated as missing → 400.
-
-        The server strips whitespace before validation, so spaces-only is
-        equivalent to an empty string, which is falsy and rejected.
-        """
-        resp = client.post("/api/auth/steam", json={"api_key": "   ", "user_id": "123"})
-        assert resp.status_code == 400
 
     def test_whitespace_only_user_id_returns_400(self, client):
         """Tab/newline-only user_id is also treated as missing after strip()."""
