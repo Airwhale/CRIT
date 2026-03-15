@@ -545,7 +545,11 @@ async def get_library(
     """
     _, session = _get_session(session_id)
 
-    if not session:
+    has_platforms = any(k in session for k in ("steam", "epic", "gog"))
+    if not has_platforms:
+        # Fall back to a library imported from CSV, if one was cached
+        if "library" in session:
+            return {"games": session["library"], "errors": []}
         raise HTTPException(400, "No platforms connected. Connect at least one platform first.")
 
     # Build a dict of {platform_name: coroutine} for the connected platforms.
@@ -587,6 +591,27 @@ async def get_library(
             errors.append({"platform": "rawg", "error": str(e)})
 
     return {"games": all_games, "errors": errors}
+
+
+@app.post("/api/library/cache")
+async def cache_library(
+    body: dict,
+    response: Response,
+    session_id: str | None = Cookie(default=None),
+):
+    """Store a client-side library (e.g. from CSV import) in the server session.
+
+    This lets /api/recommend use the imported games even when no platform
+    credentials are connected. The cached library is returned by get_library()
+    as a fallback when no platforms are present.
+    """
+    games = body.get("games")
+    if not isinstance(games, list):
+        raise HTTPException(400, "body must be {\"games\": [...]}")
+    sid, session = _get_session(session_id)
+    session["library"] = games
+    _set_session_cookie(response, sid)
+    return {"ok": True, "count": len(games)}
 
 
 # ── Platform fetch helpers (synchronous, run in thread pool) ──────────────────

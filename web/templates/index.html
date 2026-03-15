@@ -1283,7 +1283,7 @@ function importCSV(input) {
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => {
+  reader.onload = async e => {
     try {
       const games = _parseCSV(e.target.result);
       allGames = games;
@@ -1298,6 +1298,14 @@ function importCSV(input) {
       document.getElementById('rec-section').removeAttribute('hidden');
       document.getElementById('viz-section').removeAttribute('hidden');
       renderLibraryInsights();
+
+      // Cache the parsed games on the server so /api/recommend can use them
+      // even when no platform credentials are connected.
+      await fetch('/api/library/cache', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({games}),
+      });
     } catch(err) {
       document.getElementById('library-errors').innerHTML =
         `<div class="notice error visible">CSV parse error: ${escHtml(err.message)}</div>`;
