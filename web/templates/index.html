@@ -255,6 +255,34 @@
   .table-wrapper::-webkit-scrollbar { width: 6px; }
   .table-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
+  /* ── Column picker ── */
+  .col-picker { position: relative; display: inline-block; }
+  .col-picker-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 200;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.25rem;
+    min-width: 140px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .col-picker-menu.open { display: block; }
+  .col-picker-menu label {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .col-picker-menu label:hover { background: var(--bg3); }
+
   .load-library-btn {
     background: linear-gradient(135deg, var(--accent), #5b8dee);
     color: #fff;
@@ -561,25 +589,17 @@
         <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="exportCSV()">⬇ Export CSV</button>
         <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)">
         <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="document.getElementById('csv-import-input').click()">⬆ Import CSV</button>
+        <div class="col-picker">
+          <button id="col-picker-btn" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="toggleColPicker(event)">Columns ▾</button>
+          <div class="col-picker-menu" id="col-picker-menu"></div>
+        </div>
       </div>
 
       <div id="library-errors"></div>
 
       <div class="table-wrapper">
         <table class="game-table">
-          <thead>
-            <tr>
-              <th style="width:36%;cursor:pointer;" data-sort="name" onclick="headerSort('name')">Game <span class="sort-ind" id="sind-name"></span></th>
-              <th style="width:9%;cursor:pointer;" data-sort="platform" onclick="headerSort('platform')">Platform <span class="sort-ind" id="sind-platform"></span></th>
-              <th style="width:11%;cursor:pointer;" data-sort="playtime" onclick="headerSort('playtime')">Playtime <span class="sort-ind" id="sind-playtime"></span></th>
-              <th style="width:12%;cursor:pointer;" data-sort="last_played" onclick="headerSort('last_played')">Last Played <span class="sort-ind" id="sind-last_played"></span></th>
-              <th style="width:7%;cursor:pointer;" data-sort="release_year" onclick="headerSort('release_year')">Year <span class="sort-ind" id="sind-release_year"></span></th>
-              <th style="width:8%;cursor:pointer;" data-sort="rating" onclick="headerSort('rating')">RAWG <span class="sort-ind" id="sind-rating"></span></th>
-              <th style="width:9%;cursor:pointer;" data-sort="metacritic" onclick="headerSort('metacritic')">Metacritic <span class="sort-ind" id="sind-metacritic"></span></th>
-              <th style="width:8%;cursor:pointer;" data-sort="gog_rating" onclick="headerSort('gog_rating')">GOG Rating <span class="sort-ind" id="sind-gog_rating"></span></th>
-              <th style="width:13%">Genres / Tags</th>
-            </tr>
-          </thead>
+          <thead id="game-table-head"></thead>
           <tbody id="game-table-body"></tbody>
         </table>
       </div>
@@ -859,6 +879,7 @@ async function loadLibrary() {
     });
     // filterLibrary() is the single rendering path — it reads the (now-reset)
     // filter controls, rebuilds filteredGames from allGames, sorts, and renders.
+    _ensureTableInit();
     filterLibrary();
 
     if (data.errors && data.errors.length) {
@@ -884,58 +905,130 @@ async function loadLibrary() {
   }
 }
 
+// Close col-picker when clicking outside
+document.addEventListener('click', e => {
+  const menu = document.getElementById('col-picker-menu');
+  if (menu && !document.getElementById('col-picker-btn').contains(e.target) && !menu.contains(e.target))
+    menu.classList.remove('open');
+});
+
+// ── Column definitions ──────────────────────────────────────────────────────
+const COLUMNS = [
+  { key: 'name',         label: 'Game',          sort: 'name',         width: '30%' },
+  { key: 'platform',     label: 'Platform',       sort: 'platform',     width: '8%'  },
+  { key: 'playtime',     label: 'Playtime',       sort: 'playtime',     width: '9%'  },
+  { key: 'last_played',  label: 'Last Played',    sort: 'last_played',  width: '11%' },
+  { key: 'release_year', label: 'Year',           sort: 'release_year', width: '6%'  },
+  { key: 'rawg_rating',  label: 'RAWG',           sort: 'rating',       width: '7%'  },
+  { key: 'metacritic',   label: 'Metacritic',     sort: 'metacritic',   width: '8%'  },
+  { key: 'gog_rating',   label: 'GOG Rating',     sort: 'gog_rating',   width: '8%'  },
+  { key: 'genres_tags',  label: 'Genres / Tags',  sort: null,           width: '13%' },
+];
+// Columns visible by default (all of them)
+const visibleCols = new Set(COLUMNS.map(c => c.key));
+
+let _tableInited = false;
+function _ensureTableInit() {
+  if (_tableInited) return;
+  _tableInited = true;
+  // Build the column-picker menu checkboxes
+  const menu = document.getElementById('col-picker-menu');
+  menu.innerHTML = COLUMNS.map(c => `
+    <label>
+      <input type="checkbox" ${visibleCols.has(c.key) ? 'checked' : ''}
+             onchange="toggleCol('${c.key}', this.checked)">
+      ${c.label}
+    </label>`).join('');
+  renderTableHead();
+}
+
+function toggleColPicker(e) {
+  e.stopPropagation();
+  document.getElementById('col-picker-menu').classList.toggle('open');
+}
+
+function toggleCol(key, visible) {
+  if (visible) visibleCols.add(key);
+  else visibleCols.delete(key);
+  renderTableHead();
+  renderLibraryTable(_sortGames(filteredGames));
+}
+
+function renderTableHead() {
+  const vis = COLUMNS.filter(c => visibleCols.has(c.key));
+  const cells = vis.map(c => {
+    if (c.sort) {
+      return `<th style="width:${c.width};cursor:pointer;" data-sort="${c.sort}" onclick="headerSort('${c.sort}')">${c.label} <span class="sort-ind" id="sind-${c.sort}"></span></th>`;
+    }
+    return `<th style="width:${c.width};">${c.label}</th>`;
+  }).join('');
+  document.getElementById('game-table-head').innerHTML = `<tr>${cells}</tr>`;
+  _updateSortIndicators();
+}
+
 function renderLibraryTable(games) {
   const tbody = document.getElementById('game-table-body');
-  const showing = document.getElementById('lib-showing');
   document.getElementById('lib-count').textContent = `${games.length} games`;
 
-  const rows = games.map(g => {
-    const hours = g.playtime_minutes > 0
-      ? `<span class="playtime played">${(g.playtime_minutes/60).toFixed(1)}h</span>`
-      : `<span class="playtime">unplayed</span>`;
-    let lastPlayed = '<span style="color:var(--border)">—</span>';
-    if (g.last_played) {
-      const ts = parseInt(g.last_played, 10);
-      const d = isNaN(ts) ? new Date(g.last_played) : new Date(ts * 1000);
-      if (!isNaN(d.getTime())) {
-        lastPlayed = `<span style="color:var(--muted);font-size:0.8rem;">${d.toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'})}</span>`;
-      }
-    }
-    // "~" = platform doesn't have this field (show –), null/undefined = unknown (show ○)
-    const sentinel = v => v === '~'
-      ? '<span style="color:var(--border)">–</span>'
-      : '<span style="color:var(--border)">○</span>';
-    const rawg = g.rawg_rating
-      ? `<span class="rating-cell">★ ${g.rawg_rating.toFixed(1)}</span>`
-      : sentinel(g.rawg_rating);
-    const mc = g.metacritic
-      ? `<span class="rating-cell" style="color:${g.metacritic >= 80 ? 'var(--green)' : g.metacritic >= 60 ? 'var(--yellow)' : 'var(--red)'}">${g.metacritic}</span>`
-      : sentinel(g.metacritic);
-    const yr = (g.release_year && g.release_year !== '~')
-      ? `<span style="color:var(--muted);font-size:0.85rem;">${g.release_year}</span>`
-      : sentinel(g.release_year);
-    const gogR = (g.gog_rating && g.gog_rating !== '~')
-      ? `<span class="rating-cell">${g.gog_rating.toFixed(1)}</span>`
-      : sentinel(g.gog_rating);
-    const genreTags = [
-      ...(g.genres || []).slice(0, 2),
-      ...(g.tags || []).slice(0, 1),
-    ].join(', ');
-    return `<tr>
-      <td>${escHtml(g.name)}</td>
-      <td><span class="badge badge-${g.platform}">${g.platform}</span></td>
-      <td>${hours}</td>
-      <td>${lastPlayed}</td>
-      <td>${yr}</td>
-      <td>${rawg}</td>
-      <td>${mc}</td>
-      <td>${gogR}</td>
-      <td style="color:var(--muted);font-size:0.78rem;">${escHtml(genreTags)}</td>
-    </tr>`;
-  }).join('');
+  // Pre-compute cell renderers for each game object
+  const sentinel = v => v === '~'
+    ? '<span style="color:var(--border)">–</span>'
+    : '<span style="color:var(--border)">○</span>';
 
-  tbody.innerHTML = rows;
-  showing.textContent = '';
+  const cellFor = {
+    name: g => `<td>${escHtml(g.name)}</td>`,
+    platform: g => `<td><span class="badge badge-${g.platform}">${g.platform}</span></td>`,
+    playtime: g => {
+      const h = g.playtime_minutes > 0
+        ? `<span class="playtime played">${(g.playtime_minutes/60).toFixed(1)}h</span>`
+        : `<span class="playtime">unplayed</span>`;
+      return `<td>${h}</td>`;
+    },
+    last_played: g => {
+      let v = '<span style="color:var(--border)">—</span>';
+      if (g.last_played) {
+        const ts = parseInt(g.last_played, 10);
+        const d = isNaN(ts) ? new Date(g.last_played) : new Date(ts * 1000);
+        if (!isNaN(d.getTime()))
+          v = `<span style="color:var(--muted);font-size:0.8rem;">${d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})}</span>`;
+      }
+      return `<td>${v}</td>`;
+    },
+    release_year: g => {
+      const v = (g.release_year && g.release_year !== '~')
+        ? `<span style="color:var(--muted);font-size:0.85rem;">${g.release_year}</span>`
+        : sentinel(g.release_year);
+      return `<td>${v}</td>`;
+    },
+    rawg_rating: g => {
+      const v = g.rawg_rating
+        ? `<span class="rating-cell">★ ${g.rawg_rating.toFixed(1)}</span>`
+        : sentinel(g.rawg_rating);
+      return `<td>${v}</td>`;
+    },
+    metacritic: g => {
+      const v = g.metacritic
+        ? `<span class="rating-cell" style="color:${g.metacritic>=80?'var(--green)':g.metacritic>=60?'var(--yellow)':'var(--red)'}">${g.metacritic}</span>`
+        : sentinel(g.metacritic);
+      return `<td>${v}</td>`;
+    },
+    gog_rating: g => {
+      const v = (g.gog_rating && g.gog_rating !== '~')
+        ? `<span class="rating-cell">${g.gog_rating.toFixed(1)}</span>`
+        : sentinel(g.gog_rating);
+      return `<td>${v}</td>`;
+    },
+    genres_tags: g => {
+      const txt = [...(g.genres||[]).slice(0,2), ...(g.tags||[]).slice(0,1)].join(', ');
+      return `<td style="color:var(--muted);font-size:0.78rem;">${escHtml(txt)}</td>`;
+    },
+  };
+
+  const visCols = COLUMNS.filter(c => visibleCols.has(c.key));
+  tbody.innerHTML = games.map(g =>
+    `<tr>${visCols.map(c => cellFor[c.key](g)).join('')}</tr>`
+  ).join('');
+  document.getElementById('lib-showing').textContent = '';
 }
 
 function filterLibrary() {
@@ -1006,9 +1099,8 @@ function _sortGames(games) {
 }
 
 function _updateSortIndicators() {
-  ['name','platform','playtime','last_played','release_year','rating','metacritic','gog_rating'].forEach(col => {
-    const el = document.getElementById(`sind-${col}`);
-    if (!el) return;
+  document.querySelectorAll('.sort-ind').forEach(el => {
+    const col = el.id.replace('sind-', '');
     el.textContent = col === tableSortCol ? (tableSortDir === 'asc' ? ' ▲' : ' ▼') : '';
   });
 }
@@ -1056,6 +1148,7 @@ function importCSV(input) {
         const cb = document.getElementById(`filter-${p}`);
         if (cb) cb.checked = true;
       });
+      _ensureTableInit();
       filterLibrary();
       document.getElementById('library-content').removeAttribute('hidden');
       document.getElementById('rec-section').removeAttribute('hidden');
