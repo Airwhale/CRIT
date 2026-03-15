@@ -105,7 +105,7 @@ def get_wishlist_on_sale(
     api_key: str,
     user_id: str,
     min_discount: int = 20,
-    max_check: int = 100,
+    max_check: int = 300,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list[SaleGame]:
     """Fetch the user's Steam wishlist and return items that are currently on sale.

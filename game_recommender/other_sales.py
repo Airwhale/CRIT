@@ -26,17 +26,18 @@ def get_cheapshark_deals(
     min_discount: int = 40,
     page_size: int = 60,
 ) -> list[SaleGame]:
-    """Fetch top deals from CheapShark for the requested store IDs.
+    """Fetch deals from CheapShark for the requested store IDs.
 
     CheapShark's /deals endpoint accepts a single storeID at a time, so we
-    make one call per store and merge the results. Each store returns up to
-    page_size deals sorted by savings descending; we then filter locally by
-    min_discount and re-sort the merged list.
+    make one call per store and merge the results. Each page returns up to
+    page_size deals (API max 60) sorted by savings descending. We fetch
+    additional pages as long as the previous page was full (meaning more deals
+    may exist), then filter locally by min_discount and re-sort.
 
     Args:
         store_ids: List of CheapShark store ID strings to query.
         min_discount: Minimum discount percentage to include (0–100).
-        page_size: Deals to request per store (CheapShark max is 60).
+        page_size: Deals to request per page (CheapShark max is 60).
 
     Returns:
         Merged list of SaleGame objects sorted by discount descending.
@@ -44,36 +45,45 @@ def get_cheapshark_deals(
     games: list[SaleGame] = []
     for store_id in store_ids:
         store_name = _CS_STORE_NAMES.get(store_id, "Other")
-        try:
-            resp = requests.get(
-                "https://www.cheapshark.com/api/1.0/deals",
-                params={
-                    "storeID":   store_id,
-                    "sortBy":    "Savings",
-                    "pageSize":  page_size,
-                    "onSale":    1,
-                    "lowerPrice": 0,
-                },
-                timeout=10,
-            )
-            resp.raise_for_status()
-        except Exception:
-            continue  # Skip this store if the request fails
+        page = 0
+        while True:
+            try:
+                resp = requests.get(
+                    "https://www.cheapshark.com/api/1.0/deals",
+                    params={
+                        "storeID":    store_id,
+                        "sortBy":     "Savings",
+                        "pageSize":   page_size,
+                        "pageNumber": page,
+                        "onSale":     1,
+                        "lowerPrice": 0,
+                    },
+                    timeout=10,
+                )
+                resp.raise_for_status()
+            except Exception:
+                break  # Skip remaining pages for this store if the request fails
 
-        for deal in resp.json():
-            savings = float(deal.get("savings", 0))
-            if savings < min_discount:
-                continue
-            normal_cents = round(float(deal.get("normalPrice", 0)) * 100)
-            sale_cents   = round(float(deal.get("salePrice",   0)) * 100)
-            games.append(SaleGame(
-                name=deal.get("title", ""),
-                app_id=deal.get("dealID", ""),
-                discount_percent=round(savings),
-                original_price_cents=normal_cents,
-                sale_price_cents=sale_cents,
-                store=store_name,
-            ))
+            deals = resp.json()
+            for deal in deals:
+                savings = float(deal.get("savings", 0))
+                if savings < min_discount:
+                    continue
+                normal_cents = round(float(deal.get("normalPrice", 0)) * 100)
+                sale_cents   = round(float(deal.get("salePrice",   0)) * 100)
+                games.append(SaleGame(
+                    name=deal.get("title", ""),
+                    app_id=deal.get("dealID", ""),
+                    discount_percent=round(savings),
+                    original_price_cents=normal_cents,
+                    sale_price_cents=sale_cents,
+                    store=store_name,
+                ))
+
+            # If the page wasn't full there are no more pages to fetch
+            if len(deals) < page_size:
+                break
+            page += 1
 
     return sorted(games, key=lambda g: g.discount_percent, reverse=True)
 
