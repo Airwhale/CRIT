@@ -230,6 +230,7 @@
   .game-table th:hover { color: var(--text); }
   .game-table th .sort-arrow { margin-left: 4px; opacity: 0.4; }
   .game-table th.active .sort-arrow { opacity: 1; color: var(--accent2); }
+  .game-table th .sort-ind { font-size: 0.7rem; color: var(--accent2); min-width: 1ch; display: inline-block; }
   .game-table td { padding: 0.45rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.04); }
   .game-table tr:hover td { background: var(--bg3); }
 
@@ -554,9 +555,10 @@
           <option value="metacritic">Sort: Metacritic</option>
         </select>
         <span class="count-badge" id="lib-count"></span>
-        <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="loadLibrary()">
-          ↻ Refresh
-        </button>
+        <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="loadLibrary()">↻ Refresh</button>
+        <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="exportCSV()">⬇ Export CSV</button>
+        <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)">
+        <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.8rem;" onclick="document.getElementById('csv-import-input').click()">⬆ Import CSV</button>
       </div>
 
       <div id="library-errors"></div>
@@ -565,12 +567,12 @@
         <table class="game-table">
           <thead>
             <tr>
-              <th style="width:36%">Game</th>
-              <th style="width:9%">Platform</th>
-              <th style="width:11%">Playtime</th>
-              <th style="width:12%">Last Played</th>
-              <th style="width:9%">RAWG</th>
-              <th style="width:10%">Metacritic</th>
+              <th style="width:36%;cursor:pointer;" data-sort="name" onclick="headerSort('name')">Game <span class="sort-ind" id="sind-name"></span></th>
+              <th style="width:9%;cursor:pointer;" data-sort="platform" onclick="headerSort('platform')">Platform <span class="sort-ind" id="sind-platform"></span></th>
+              <th style="width:11%;cursor:pointer;" data-sort="playtime" onclick="headerSort('playtime')">Playtime <span class="sort-ind" id="sind-playtime"></span></th>
+              <th style="width:12%;cursor:pointer;" data-sort="last_played" onclick="headerSort('last_played')">Last Played <span class="sort-ind" id="sind-last_played"></span></th>
+              <th style="width:9%;cursor:pointer;" data-sort="rating" onclick="headerSort('rating')">RAWG <span class="sort-ind" id="sind-rating"></span></th>
+              <th style="width:10%;cursor:pointer;" data-sort="metacritic" onclick="headerSort('metacritic')">Metacritic <span class="sort-ind" id="sind-metacritic"></span></th>
               <th style="width:13%">Genres</th>
             </tr>
           </thead>
@@ -932,19 +934,161 @@ function filterLibrary() {
   sortLibrary();
 }
 
+let tableSortCol = 'playtime';
+let tableSortDir = 'desc';
+
+function headerSort(col) {
+  if (tableSortCol === col) {
+    tableSortDir = tableSortDir === 'desc' ? 'asc' : 'desc';
+  } else {
+    tableSortCol = col;
+    // Default direction: ascending for name/platform, descending for everything else
+    tableSortDir = (col === 'name' || col === 'platform') ? 'asc' : 'desc';
+  }
+  // Sync the dropdown if it has this option
+  const sel = document.getElementById('lib-sort');
+  if ([...sel.options].some(o => o.value === col)) sel.value = col;
+  renderLibraryTable(_sortGames(filteredGames));
+  _updateSortIndicators();
+}
+
 function sortLibrary() {
-  const sortBy = document.getElementById('lib-sort').value;
-  const sorted = [...filteredGames];
-  if (sortBy === 'playtime') sorted.sort((a,b) => b.playtime_minutes - a.playtime_minutes);
-  else if (sortBy === 'last_played') sorted.sort((a,b) => {
-    const ta = a.last_played ? parseInt(a.last_played, 10) || 0 : 0;
-    const tb = b.last_played ? parseInt(b.last_played, 10) || 0 : 0;
-    return tb - ta;
+  // Dropdown changed — sync state then re-render
+  tableSortCol = document.getElementById('lib-sort').value;
+  tableSortDir = (tableSortCol === 'name') ? 'asc' : 'desc';
+  renderLibraryTable(_sortGames(filteredGames));
+  _updateSortIndicators();
+}
+
+function _sortGames(games) {
+  const sorted = [...games];
+  const dir = tableSortDir === 'asc' ? 1 : -1;
+  if (tableSortCol === 'playtime')
+    sorted.sort((a,b) => dir * (a.playtime_minutes - b.playtime_minutes));
+  else if (tableSortCol === 'last_played')
+    sorted.sort((a,b) => {
+      const ta = a.last_played ? parseInt(a.last_played, 10) || 0 : 0;
+      const tb = b.last_played ? parseInt(b.last_played, 10) || 0 : 0;
+      return dir * (ta - tb);
+    });
+  else if (tableSortCol === 'name')
+    sorted.sort((a,b) => dir * a.name.localeCompare(b.name));
+  else if (tableSortCol === 'platform')
+    sorted.sort((a,b) => dir * a.platform.localeCompare(b.platform));
+  else if (tableSortCol === 'rating')
+    sorted.sort((a,b) => dir * ((a.rawg_rating||0) - (b.rawg_rating||0)));
+  else if (tableSortCol === 'metacritic')
+    sorted.sort((a,b) => dir * ((a.metacritic||0) - (b.metacritic||0)));
+  return sorted;
+}
+
+function _updateSortIndicators() {
+  ['name','platform','playtime','last_played','rating','metacritic'].forEach(col => {
+    const el = document.getElementById(`sind-${col}`);
+    if (!el) return;
+    el.textContent = col === tableSortCol ? (tableSortDir === 'asc' ? ' ▲' : ' ▼') : '';
   });
-  else if (sortBy === 'name') sorted.sort((a,b) => a.name.localeCompare(b.name));
-  else if (sortBy === 'rating') sorted.sort((a,b) => (b.rawg_rating||0) - (a.rawg_rating||0));
-  else if (sortBy === 'metacritic') sorted.sort((a,b) => (b.metacritic||0) - (a.metacritic||0));
-  renderLibraryTable(sorted);
+}
+
+function exportCSV() {
+  const cols = ['name','platform','app_id','playtime_minutes','last_played','rawg_rating','metacritic','genres'];
+  const escField = v => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [cols.join(',')];
+  allGames.forEach(g => {
+    lines.push([
+      escField(g.name),
+      escField(g.platform),
+      escField(g.app_id),
+      escField(g.playtime_minutes),
+      escField(g.last_played),
+      escField(g.rawg_rating),
+      escField(g.metacritic),
+      escField((g.genres||[]).join(';')),
+    ].join(','));
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'library.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const games = _parseCSV(e.target.result);
+      allGames = games;
+      document.getElementById('lib-search').value = '';
+      ['steam','epic','gog'].forEach(p => {
+        const cb = document.getElementById(`filter-${p}`);
+        if (cb) cb.checked = true;
+      });
+      filterLibrary();
+      document.getElementById('library-content').removeAttribute('hidden');
+      document.getElementById('rec-section').removeAttribute('hidden');
+    } catch(err) {
+      document.getElementById('library-errors').innerHTML =
+        `<div class="notice error visible">CSV parse error: ${escHtml(err.message)}</div>`;
+    }
+  };
+  reader.readAsText(file);
+  // Reset so the same file can be re-imported
+  input.value = '';
+}
+
+function _parseCSV(text) {
+  const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+  if (!lines.length) throw new Error('empty file');
+
+  // Simple CSV tokeniser (handles quoted fields with escaped quotes)
+  const tokenise = line => {
+    const fields = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQ) {
+        if (c === '"' && line[i+1] === '"') { cur += '"'; i++; }
+        else if (c === '"') inQ = false;
+        else cur += c;
+      } else {
+        if (c === '"') inQ = true;
+        else if (c === ',') { fields.push(cur); cur = ''; }
+        else cur += c;
+      }
+    }
+    fields.push(cur);
+    return fields;
+  };
+
+  const header = tokenise(lines[0]);
+  const idx = f => header.indexOf(f);
+  const iName = idx('name'), iPlatform = idx('platform'), iAppId = idx('app_id');
+  const iPT = idx('playtime_minutes'), iLP = idx('last_played');
+  const iRawg = idx('rawg_rating'), iMC = idx('metacritic'), iGenres = idx('genres');
+  if (iName < 0 || iPlatform < 0) throw new Error('missing required columns: name, platform');
+
+  return lines.slice(1).filter(l => l.trim()).map(line => {
+    const f = tokenise(line);
+    const get = i => (i >= 0 && i < f.length) ? f[i] : '';
+    const num = (i, fn) => { const v = get(i); return v ? fn(v) : null; };
+    return {
+      name:             get(iName),
+      platform:         get(iPlatform),
+      app_id:           get(iAppId),
+      playtime_minutes: num(iPT, v => parseInt(v,10)) ?? 0,
+      last_played:      get(iLP) || null,
+      rawg_rating:      num(iRawg, v => parseFloat(v)),
+      metacritic:       num(iMC, v => parseInt(v,10)),
+      genres:           get(iGenres) ? get(iGenres).split(';').filter(Boolean) : [],
+    };
+  });
 }
 
 // ── Mode tabs ──────────────────────────────────────────────────────────────────
