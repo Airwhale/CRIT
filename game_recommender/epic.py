@@ -14,8 +14,11 @@ Note: Epic does not expose playtime via any API, so all games will show 0h.
 """
 
 import base64
+import logging
 import requests
 from .models import Game
+
+logger = logging.getLogger(__name__)
 
 # ── OAuth2 client credentials ──────────────────────────────────────────────────
 # These are the "launcherAppClient2" credentials used by third-party Epic clients
@@ -33,10 +36,25 @@ EPIC_AUTH_URL = (
 )
 
 # OAuth2 token endpoint for the launcher client
-_TOKEN_URL   = "https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token"
+_TOKEN_URL = "https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token"
 
-# Library endpoint — returns all catalog items the account has entitlement to
+# Primary library endpoint — returns catalog items the account has entitlement to
 _LIBRARY_URL = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items"
+
+# Fallback: launcher assets endpoint lists every owned app by appName/catalogItemId.
+# This is the same mechanism Heroic Games Launcher uses and is more reliable than
+# the library service when the library service returns empty results.
+_ASSETS_URL = (
+    "https://launcher-public-service-prod06.ol.epicgames.com"
+    "/launcher/api/public/assets/v2/platform/Windows/label/Live"
+)
+
+# Catalog service resolves catalogItemId → human-readable title, release date, etc.
+# Requires {namespace} in the path; accepts up to ~20 `id` params per request.
+_CATALOG_URL = (
+    "https://catalog-public-service-prod06.ol.epicgames.com"
+    "/catalog/api/shared/namespace/{namespace}/bulk/items"
+)
 
 
 def _basic_auth() -> str:
@@ -116,25 +134,133 @@ def refresh_tokens(refresh_token: str) -> dict:
     return resp.json()
 
 
+def _filter_title(title: str, seen: set) -> bool:
+    """Return True if this title should be kept (not filtered out).
+
+    Filters applied:
+      - blank / whitespace-only: skip
+      - exactly 32 all-alphanumeric chars: skip (these are raw catalogItem UUIDs
+        that Epic occasionally surfaces as metadata.title for internal entitlements)
+      - already seen (duplicate across pages): skip
+    """
+    if not title:
+        return False
+    if len(title) == 32 and title.isalnum():
+        return False
+    if title in seen:
+        return False
+    return True
+
+
+def _extract_year(raw_date: str) -> int | None:
+    """Parse a 4-digit year from the start of an ISO date string, or return None."""
+    try:
+        return int(raw_date[:4]) if len(raw_date) >= 4 and raw_date[:4].isdigit() else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _get_games_via_assets(session: requests.Session) -> list[Game]:
+    """Fetch the Epic library via the launcher assets API + catalog service.
+
+    This is the same mechanism Heroic Games Launcher uses and is more reliable
+    than the library service for accounts where the library endpoint returns no
+    results (token scope differences, regional endpoints, API changes, etc.).
+
+    Flow:
+      1. GET /assets/v2/platform/Windows/label/Live  →  list of owned apps
+         Each asset has: appName, catalogItemId, namespace
+      2. Group assets by namespace and batch-look up titles via the catalog API
+         (up to 20 IDs per namespace per request)
+
+    Args:
+        session: requests.Session with Authorization and User-Agent already set.
+
+    Returns:
+        List of Game objects sorted alphabetically.
+    """
+    resp = session.get(_ASSETS_URL, timeout=15)
+    resp.raise_for_status()
+    assets = resp.json().get("assets") or []
+    logger.debug("Epic assets endpoint returned %d assets", len(assets))
+
+    # Group catalog IDs by namespace for batch catalog lookups.
+    # namespace → [(catalogItemId, appName), ...]
+    by_ns: dict[str, list[tuple[str, str]]] = {}
+    for asset in assets:
+        ns  = asset.get("namespace") or ""
+        cid = asset.get("catalogItemId") or ""
+        if not ns or not cid:
+            continue
+        by_ns.setdefault(ns, []).append((cid, asset.get("appName") or ""))
+
+    games: list[Game] = []
+    seen:  set[str]   = set()
+
+    for ns, items in by_ns.items():
+        # Catalog API accepts up to ~20 IDs per request; batch accordingly.
+        for i in range(0, len(items), 20):
+            batch = items[i : i + 20]
+            params: dict = {
+                "id":                     [cid for cid, _ in batch],
+                "includeDLCDetails":      "false",
+                "includeMainGameDetails": "true",
+                "country":                "US",
+                "locale":                 "en-US",
+            }
+            try:
+                cr = session.get(
+                    _CATALOG_URL.format(namespace=ns),
+                    params=params,
+                    timeout=15,
+                )
+                cr.raise_for_status()
+                catalog = cr.json()
+            except requests.HTTPError as exc:
+                logger.debug(
+                    "Epic catalog lookup failed for namespace %r: %s", ns, exc
+                )
+                continue
+
+            for cid, _ in batch:
+                item      = catalog.get(cid) or {}
+                raw_title = (item.get("title") or "").strip()
+                if not _filter_title(raw_title, seen):
+                    continue
+                seen.add(raw_title)
+
+                # releaseInfo is a list; use the first entry's dateAdded
+                raw_date = ""
+                for ri in item.get("releaseInfo") or []:
+                    raw_date = ri.get("dateAdded") or ri.get("releaseDate") or ""
+                    if raw_date:
+                        break
+
+                games.append(Game(
+                    name=raw_title,
+                    platform="epic",
+                    app_id=cid,
+                    release_year=_extract_year(raw_date),
+                ))
+
+    logger.debug("Epic assets fallback produced %d games", len(games))
+    return sorted(games, key=lambda g: g.name.lower())
+
+
 def get_epic_library(access_token: str) -> list[Game]:
     """Fetch all games in the user's Epic library.
 
-    Iterates through cursor-based pages of the library endpoint, collecting
-    all catalog records, then deduplicates and filters them into clean Game objects.
+    Primary path: the library service with includeMetadata=True returns records
+    with embedded metadata (title, releaseDate). Records without a metadata.title
+    are internal engine/service entitlements and are skipped.
+
+    Fallback path: if the library service returns no playable games (empty response,
+    token scope limitation, or API change), the function automatically retries using
+    the launcher assets API + catalog service — the same mechanism used by Heroic
+    Games Launcher, which is actively maintained and reliably returns all owned games.
 
     Pagination: the response includes responseMetadata.nextCursor when more pages
     exist. An empty/missing cursor means we've reached the end.
-
-    Title resolution:
-      Only metadata.title is used. appName and catalogId are internal
-      codenames (e.g. "Arrowroot", "bobcat") set by Epic engineers and
-      are never shown to users. Records without a metadata.title are
-      internal engine/service entitlements and are skipped entirely.
-
-    Filtering:
-      - Records with no metadata.title are skipped (internal entitlements)
-      - Blank/whitespace titles are skipped
-      - Duplicate titles across pages are skipped (keeps first occurrence)
 
     Args:
         access_token: Bearer token from exchange_code() or refresh_tokens().
@@ -145,7 +271,6 @@ def get_epic_library(access_token: str) -> list[Game]:
 
     Raises:
         requests.HTTPError: On auth failure (401) or other API errors.
-        TypeError: If the API returns null for the "records" field (defensive check).
     """
     # Use a persistent session so the Authorization header is sent on every
     # paginated request without repeating it in every call.
@@ -158,14 +283,17 @@ def get_epic_library(access_token: str) -> list[Game]:
         "User-Agent": "EpicGamesLauncher/14.0.8-22004860 Windows/10.0.19041.1.256.64bit",
     })
 
+    # ── Primary path: library service ─────────────────────────────────────────
     records = []   # Accumulate raw records from all pages before processing
-    cursor = None  # Start without a cursor (first page)
+    cursor  = None  # Start without a cursor (first page)
 
-    # Paginate until the API stops returning a next cursor
     while True:
-        params: dict = {"includeMetadata": "true"}  # metadata contains the human title
+        # Use Python True so requests encodes includeMetadata=True (capital T),
+        # matching exactly what Legendary sends. The library service is
+        # case-sensitive about this boolean parameter.
+        params: dict = {"includeMetadata": True}
         if cursor:
-            params["cursor"] = cursor  # Add cursor only for pages 2+
+            params["cursor"] = cursor
 
         resp = session.get(_LIBRARY_URL, params=params, timeout=15)
         resp.raise_for_status()
@@ -175,6 +303,9 @@ def get_epic_library(access_token: str) -> list[Game]:
         # Use `or []` because the key may be present with a null value, in which
         # case data.get("records", []) returns None rather than the default.
         records.extend(data.get("records") or [])
+        logger.debug(
+            "Epic library page fetched: %d records so far", len(records)
+        )
 
         # Extract next cursor; an empty string or missing key both stop pagination.
         # Use `or {}` in case responseMetadata is present but null — the default
@@ -185,49 +316,47 @@ def get_epic_library(access_token: str) -> list[Game]:
             break
 
     # ── Deduplicate and filter records into Game objects ──────────────────────
-    games = []
-    seen = set()  # Track titles already added to prevent duplicates across pages
+    games: list[Game] = []
+    seen:  set[str]   = set()
 
     for r in records:
         # metadata may be None for internal engine/service entitlements.
         # Only metadata.title is a human-readable name set by Epic's catalog;
         # appName and catalogId are internal identifiers / codenames (e.g.
         # "Arrowroot", "bobcat") that are not meaningful to users.
-        # Skipping records with no metadata.title filters out all those noise
-        # entries while keeping every actual purchasable / free game.
-        metadata = r.get("metadata") or {}
-        raw_title = metadata.get("title")
+        metadata  = r.get("metadata") or {}
+        raw_title = (metadata.get("title") or "").strip()
 
-        # Only metadata.title is the human-readable name set by Epic's catalog.
-        # appName and catalogId are internal identifiers / codenames (e.g.
-        # "Arrowroot", "bobcat", "prokofiev") that are never shown to users.
-        # Records with no metadata.title are internal engine/service entitlements
-        # and must be skipped — falling back to appName would surface those codenames.
-        if not raw_title:
+        if not _filter_title(raw_title, seen):
             continue
+        seen.add(raw_title)
 
-        title = raw_title.strip()
-
-        # Skip entries with no title, 32-char all-alphanumeric internal IDs, or duplicates
-        if not title or (len(title) == 32 and title.isalnum()) or title in seen:
-            continue
-
-        seen.add(title)
-        # Extract release year from ISO date string (e.g. "2021-08-12T00:00:00.000Z")
-        raw_date = metadata.get("releaseDate") or ""
-        try:
-            release_year = int(raw_date[:4]) if len(raw_date) >= 4 and raw_date[:4].isdigit() else None
-        except (ValueError, TypeError):
-            release_year = None
         games.append(Game(
-            name=title,
+            name=raw_title,
             platform="epic",
             # Prefer catalogId as the stable identifier; fall back to appName
             app_id=r.get("catalogId") or r.get("appName"),
             # playtime_minutes intentionally omitted (defaults to 0) because
             # Epic provides no playtime data through their public APIs
-            release_year=release_year,
+            release_year=_extract_year(metadata.get("releaseDate") or ""),
         ))
 
-    # Sort alphabetically so the output is deterministic and easy to scan
-    return sorted(games, key=lambda g: g.name.lower())
+    logger.debug(
+        "Epic library service: %d raw records → %d games after filtering",
+        len(records), len(games),
+    )
+
+    games = sorted(games, key=lambda g: g.name.lower())
+
+    # ── Fallback path: assets API + catalog service ────────────────────────────
+    # If the library service returned no playable games, fall back to the launcher
+    # assets API which enumerates owned apps by catalogItemId and resolves titles
+    # via the catalog service. This is the approach used by Heroic Games Launcher
+    # and is more robust against token scope limitations and library API changes.
+    if not games:
+        logger.debug(
+            "Epic library service returned 0 games; trying assets+catalog fallback"
+        )
+        games = _get_games_via_assets(session)
+
+    return games

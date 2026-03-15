@@ -11,7 +11,9 @@ import pytest
 import requests as req_lib
 from unittest.mock import patch, MagicMock, call
 
-from game_recommender.epic import exchange_code, refresh_tokens, get_epic_library
+from game_recommender.epic import (
+    exchange_code, refresh_tokens, get_epic_library, _get_games_via_assets,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -253,9 +255,14 @@ class TestGetEpicLibrary:
         assert len(games) == 1  # Only "Real Game" survives
 
     def test_empty_library_returns_empty_list(self):
-        """An account with no games returns an empty list without error."""
+        """An account with no games returns an empty list without error.
+
+        When the library service returns 0 records the fallback fires; patching
+        _get_games_via_assets to [] keeps this test focused on the library path.
+        """
         resp = _library_resp([])
-        with patch("game_recommender.epic.requests.Session") as MockSession:
+        with patch("game_recommender.epic.requests.Session") as MockSession, \
+             patch("game_recommender.epic._get_games_via_assets", return_value=[]):
             MockSession.return_value = self._mock_session(resp)
             games = get_epic_library("tok")
 
@@ -401,3 +408,216 @@ class TestGetEpicLibraryCornerCases:
 
         assert len(games) == 1   # game was returned
         assert s.get.call_count == 1   # loop exited cleanly (cursor was None)
+
+# ── includeMetadata parameter case ────────────────────────────────────────────
+
+class TestIncludeMetadataParam:
+
+    def test_include_metadata_sent_as_True(self):
+        """includeMetadata must be Python True (encodes as 'True', capital T).
+
+        Legendary sends ?includeMetadata=True (capital T from Python bool True).
+        Epic's library service is case-sensitive; lowercase 'true' results in
+        metadata not being included, so all titles are null and 0 games return.
+        """
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {
+            "records": [{"appName": "A", "catalogId": "a", "metadata": {"title": "Alpha"}}],
+            "responseMetadata": {},
+        }
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = MagicMock()
+            s.get.return_value = resp
+            MockSession.return_value = s
+            get_epic_library("tok")
+
+        first_call_params = s.get.call_args_list[0][1]["params"]
+        assert first_call_params.get("includeMetadata") is True, (
+            "includeMetadata must be Python True (sends 'True'), not the string 'true'"
+        )
+
+
+# ── Fallback: assets API + catalog service ────────────────────────────────────
+
+def _assets_resp(assets: list) -> MagicMock:
+    """Mock a successful assets API response."""
+    r = MagicMock()
+    r.raise_for_status.return_value = None
+    r.json.return_value = {"assets": assets}
+    return r
+
+
+def _catalog_resp(items: dict) -> MagicMock:
+    """Mock a successful catalog API response (catalogItemId → item dict)."""
+    r = MagicMock()
+    r.raise_for_status.return_value = None
+    r.json.return_value = items
+    return r
+
+
+class TestFallbackBehaviour:
+
+    def test_fallback_triggered_when_library_returns_zero_games(self):
+        """When the library service yields 0 games, _get_games_via_assets is called."""
+        from game_recommender.models import Game as G
+        library_resp = _library_resp([])  # zero records
+        fallback_game = G(name="Fallback Game", platform="epic")
+        with patch("game_recommender.epic.requests.Session") as MockSession, \
+             patch(
+                 "game_recommender.epic._get_games_via_assets",
+                 return_value=[fallback_game],
+             ) as mock_fallback:
+            s = MagicMock()
+            s.get.return_value = library_resp
+            MockSession.return_value = s
+            games = get_epic_library("tok")
+
+        mock_fallback.assert_called_once()
+        assert len(games) == 1
+        assert games[0].name == "Fallback Game"
+
+    def test_fallback_not_triggered_when_library_returns_games(self):
+        """When the library service returns games, the fallback must not be called."""
+        resp = _library_resp([
+            {"appName": "A", "catalogId": "a", "metadata": {"title": "Alpha"}},
+        ])
+        with patch("game_recommender.epic.requests.Session") as MockSession, \
+             patch("game_recommender.epic._get_games_via_assets") as mock_fallback:
+            s = MagicMock()
+            s.get.return_value = resp
+            MockSession.return_value = s
+            games = get_epic_library("tok")
+
+        mock_fallback.assert_not_called()
+        assert len(games) == 1
+
+    def test_fallback_triggered_when_all_library_records_filtered(self):
+        """When library returns records that are ALL filtered (no metadata.title),
+        the fallback fires — 0 surviving games has the same effect as 0 records."""
+        from game_recommender.models import Game as G
+        resp = _library_resp([
+            {"appName": "internal", "catalogId": "x", "metadata": {}},  # no title
+        ])
+        fallback_game = G(name="Via Assets", platform="epic")
+        with patch("game_recommender.epic.requests.Session") as MockSession, \
+             patch(
+                 "game_recommender.epic._get_games_via_assets",
+                 return_value=[fallback_game],
+             ) as mock_fallback:
+            s = MagicMock()
+            s.get.return_value = resp
+            MockSession.return_value = s
+            games = get_epic_library("tok")
+
+        mock_fallback.assert_called_once()
+        assert games[0].name == "Via Assets"
+
+
+class TestGetGamesViaAssets:
+
+    def _session(self, *responses):
+        """Mock Session whose .get() yields the given responses in order."""
+        s = MagicMock()
+        s.get.side_effect = list(responses)
+        return s
+
+    def test_resolves_title_via_catalog(self):
+        """Assets endpoint + catalog lookup → Game objects with correct names."""
+        assets = _assets_resp([
+            {"namespace": "ns1", "catalogItemId": "cid1", "appName": "codename"},
+        ])
+        catalog = _catalog_resp({
+            "cid1": {"title": "My Game", "releaseInfo": []},
+        })
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets, catalog)
+            MockSession.return_value = s
+            games = _get_games_via_assets(s)
+
+        assert len(games) == 1
+        assert games[0].name == "My Game"
+        assert games[0].platform == "epic"
+        assert games[0].app_id == "cid1"
+
+    def test_skips_catalog_item_with_no_title(self):
+        """Catalog items without a title are filtered out."""
+        assets = _assets_resp([
+            {"namespace": "ns1", "catalogItemId": "cid1", "appName": "x"},
+            {"namespace": "ns1", "catalogItemId": "cid2", "appName": "y"},
+        ])
+        catalog = _catalog_resp({
+            "cid1": {"title": "", "releaseInfo": []},
+            "cid2": {"title": "Real Game", "releaseInfo": []},
+        })
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets, catalog)
+            MockSession.return_value = s
+            games = _get_games_via_assets(s)
+
+        assert len(games) == 1
+        assert games[0].name == "Real Game"
+
+    def test_groups_items_by_namespace(self):
+        """Assets from the same namespace are looked up in a single catalog request."""
+        assets = _assets_resp([
+            {"namespace": "ns1", "catalogItemId": "a", "appName": "x"},
+            {"namespace": "ns1", "catalogItemId": "b", "appName": "y"},
+        ])
+        catalog = _catalog_resp({
+            "a": {"title": "Alpha", "releaseInfo": []},
+            "b": {"title": "Beta",  "releaseInfo": []},
+        })
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets, catalog)
+            MockSession.return_value = s
+            games = _get_games_via_assets(s)
+
+        # Two assets in one namespace → one catalog request, two games
+        assert s.get.call_count == 2   # 1 assets call + 1 catalog call
+        assert {g.name for g in games} == {"Alpha", "Beta"}
+
+    def test_empty_assets_returns_empty_list(self):
+        """No owned assets → empty game list."""
+        assets = _assets_resp([])
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets)
+            MockSession.return_value = s
+            games = _get_games_via_assets(s)
+
+        assert games == []
+
+    def test_catalog_error_skips_namespace(self):
+        """A catalog HTTP error for one namespace is swallowed; other namespaces proceed."""
+        assets = _assets_resp([
+            {"namespace": "bad_ns",  "catalogItemId": "x", "appName": "a"},
+            {"namespace": "good_ns", "catalogItemId": "y", "appName": "b"},
+        ])
+        bad_catalog  = MagicMock()
+        bad_catalog.raise_for_status.side_effect = req_lib.HTTPError("403")
+        good_catalog = _catalog_resp({"y": {"title": "Good Game", "releaseInfo": []}})
+
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets, bad_catalog, good_catalog)
+            MockSession.return_value = s
+            games = _get_games_via_assets(s)
+
+        assert len(games) == 1
+        assert games[0].name == "Good Game"
+
+    def test_result_sorted_alphabetically(self):
+        """Games from the assets fallback are sorted alphabetically."""
+        assets = _assets_resp([
+            {"namespace": "ns1", "catalogItemId": "z", "appName": "z"},
+            {"namespace": "ns1", "catalogItemId": "a", "appName": "a"},
+        ])
+        catalog = _catalog_resp({
+            "z": {"title": "Zombie Game", "releaseInfo": []},
+            "a": {"title": "Alpha Game",  "releaseInfo": []},
+        })
+        with patch("game_recommender.epic.requests.Session") as MockSession:
+            s = self._session(assets, catalog)
+            MockSession.return_value = s
+            games = _get_games_via_assets(s)
+
+        assert [g.name for g in games] == ["Alpha Game", "Zombie Game"]
