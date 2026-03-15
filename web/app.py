@@ -37,7 +37,7 @@ from dotenv import load_dotenv
 # Load .env before anything else reads environment variables
 load_dotenv()
 
-app = FastAPI(title="Game Recommender")
+app = FastAPI(title="CRIT — Curated Recommendations In Titles")
 
 # Whether to set the Secure flag on session cookies.
 # In production (HTTPS), set COOKIE_SECURE=true in .env.

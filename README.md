@@ -1,4 +1,4 @@
-# Game Recommender
+# CRIT — Curated Recommendations In Titles
 
 An AI-powered game recommendation web app. Connect your Steam, Epic Games, and GOG libraries, then let Claude analyse your play history and recommend what to play next — or find great deals in the current Steam sale that actually match your taste.
 
@@ -255,7 +255,7 @@ Create `/etc/systemd/system/game-recommender.service`:
 
 ```ini
 [Unit]
-Description=Game Recommender
+Description=CRIT — Curated Recommendations In Titles
 After=network.target
 
 [Service]
@@ -377,7 +377,7 @@ sudo htpasswd -c /etc/nginx/.htpasswd yourusername
 ```
 
 ```nginx
-auth_basic "Game Recommender";
+auth_basic "CRIT — Curated Recommendations In Titles";
 auth_basic_user_file /etc/nginx/.htpasswd;
 ```
 

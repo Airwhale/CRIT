@@ -115,7 +115,7 @@ class TestIndexRoute:
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
         # Basic sanity check that the right page is being served
-        assert "Game Recommender" in resp.text
+        assert "CRIT" in resp.text
 
     def test_security_headers_present(self, client):
         """Security middleware adds three headers to every response.
