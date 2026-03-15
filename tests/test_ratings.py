@@ -116,7 +116,7 @@ class TestGetGameRatingSuccess:
 
         assert r1 is None
         assert r2 is None
-        assert mock_get.call_count == 1  # Second call served from cache
+        assert mock_get.call_count == 2  # precise pass + fuzzy fallback; second get_game_rating call served from cache
 
     def test_tags_capped_at_10(self):
         """RAWG can return many tags; we cap at 10 to avoid prompt bloat."""
