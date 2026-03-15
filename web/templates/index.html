@@ -825,7 +825,19 @@ async function loadLibrary() {
   try {
     const data = await apiFetch(`/api/library?skip_ratings=${skipRatings}`);
     allGames = data.games || [];
-    filteredGames = [...allGames];
+
+    // Reset all filter controls to a clean state so every load starts fresh.
+    // This guarantees that games from all connected platforms are always visible
+    // right after loading — no stale search or unchecked platform from a previous
+    // session can accidentally hide games.
+    document.getElementById('lib-search').value = '';
+    ['steam', 'epic', 'gog'].forEach(p => {
+      const cb = document.getElementById(`filter-${p}`);
+      if (cb) cb.checked = true;
+    });
+    // filterLibrary() is the single rendering path — it reads the (now-reset)
+    // filter controls, rebuilds filteredGames from allGames, sorts, and renders.
+    filterLibrary();
 
     if (data.errors && data.errors.length) {
       data.errors.forEach(e => {
@@ -833,7 +845,6 @@ async function loadLibrary() {
       });
     }
 
-    renderLibraryTable(filteredGames);
     content.removeAttribute('hidden');
     document.getElementById('rec-section').removeAttribute('hidden');
 
