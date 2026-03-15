@@ -50,15 +50,19 @@ def _basic_auth() -> str:
     return "Basic " + base64.b64encode(raw.encode()).decode()
 
 
-def exchange_code(auth_code: str) -> dict:
+def exchange_code(auth_code: str, redirect_uri: str | None = None) -> dict:
     """Exchange an authorization code for access and refresh tokens.
 
     Called immediately after the user copies their authorizationCode from
-    the EPIC_AUTH_URL page. The code is short-lived (typically ~5 minutes),
-    so this should be called promptly.
+    the EPIC_AUTH_URL page, or after the OAuth redirect callback delivers a code.
+    The code is short-lived (typically ~5 minutes), so this should be called promptly.
 
     Args:
-        auth_code: The "authorizationCode" value from the Epic redirect JSON.
+        auth_code: The "authorizationCode" value from the Epic redirect JSON, or the
+            ?code= parameter delivered to the OAuth redirect callback.
+        redirect_uri: The redirect_uri used in the authorization request. Must be
+            included when using the OAuth2 redirect flow (RFC 6749 §4.1.3); omit for
+            the manual code-paste flow which has no redirect_uri.
 
     Returns:
         Dict containing: access_token, refresh_token, account_id, expires_in.
@@ -67,13 +71,16 @@ def exchange_code(auth_code: str) -> dict:
         requests.HTTPError: If Epic rejects the code (e.g. expired or invalid).
         requests.ConnectionError / requests.Timeout: On network failure.
     """
+    body: dict = {"grant_type": "authorization_code", "code": auth_code}
+    if redirect_uri:
+        body["redirect_uri"] = redirect_uri
     resp = requests.post(
         _TOKEN_URL,
         headers={
             "Authorization": _basic_auth(),               # Client authentication
             "Content-Type": "application/x-www-form-urlencoded",
         },
-        data={"grant_type": "authorization_code", "code": auth_code},
+        data=body,
         timeout=15,
     )
     resp.raise_for_status()
@@ -158,8 +165,10 @@ def get_epic_library(access_token: str) -> list[Game]:
         resp.raise_for_status()
         data = resp.json()
 
-        # Extend (not append) to flatten pages into one flat record list
-        records.extend(data.get("records", []))
+        # Extend (not append) to flatten pages into one flat record list.
+        # Use `or []` because the key may be present with a null value, in which
+        # case data.get("records", []) returns None rather than the default.
+        records.extend(data.get("records") or [])
 
         # Extract next cursor; an empty string or missing key both stop pagination
         cursor = data.get("responseMetadata", {}).get("nextCursor")

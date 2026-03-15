@@ -68,6 +68,18 @@ class TestExchangeCode:
         _, kwargs = mock_post.call_args
         assert kwargs["data"]["grant_type"] == "authorization_code"
         assert kwargs["data"]["code"] == "my_auth_code"
+        # No redirect_uri when not provided (manual code-paste flow)
+        assert "redirect_uri" not in kwargs["data"]
+
+    def test_redirect_uri_included_when_provided(self):
+        """When redirect_uri is given (OAuth redirect flow), it is sent in the POST body."""
+        resp = _post_resp({"access_token": "tok", "refresh_token": "ref", "account_id": "u"})
+        with patch("game_recommender.epic.requests.post", return_value=resp) as mock_post:
+            exchange_code("code123", redirect_uri="http://localhost:8000/auth/epic/callback")
+
+        _, kwargs = mock_post.call_args
+        assert kwargs["data"]["redirect_uri"] == "http://localhost:8000/auth/epic/callback"
+        assert kwargs["data"]["code"] == "code123"
 
     def test_failure_invalid_code_raises_http_error(self):
         """An expired or invalid auth code returns 401, which should raise HTTPError."""
@@ -317,11 +329,11 @@ class TestGetEpicLibraryCornerCases:
         assert len(games) == 1
         assert games[0].name == "a" * 31
 
-    def test_null_records_raises_type_error(self):
-        """records: null causes list.extend(None) which raises TypeError.
+    def test_null_records_returns_empty_list(self):
+        """records: null is treated as an empty page — the function returns [] gracefully.
 
-        This documents an unhandled crash path. If the Epic API ever returns
-        null for records, the function will raise rather than returning empty.
+        `data.get("records", [])` returns None when the key exists with a null value
+        (the default only applies when the key is absent). Using `or []` handles this.
         """
         resp = MagicMock()
         resp.raise_for_status.return_value = None
@@ -330,8 +342,8 @@ class TestGetEpicLibraryCornerCases:
             s = MagicMock()
             s.get.return_value = resp
             MockSession.return_value = s
-            with pytest.raises(TypeError):
-                get_epic_library("tok")
+            games = get_epic_library("tok")
+        assert games == []
 
     def test_records_accumulated_across_pages_before_dedup(self):
         """Deduplication happens after all pages are fetched — not per-page.

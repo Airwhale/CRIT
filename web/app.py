@@ -259,7 +259,11 @@ async def epic_auth_callback(
     try:
         # Run the synchronous exchange_code() in a thread pool so we don't
         # block the async event loop during the HTTP round-trip to Epic.
-        tokens = await asyncio.to_thread(exchange_code, code)
+        # Pass the redirect_uri so it matches what was sent in the authorization
+        # request — required by RFC 6749 §4.1.3 when redirect_uri was included.
+        base = str(request.base_url).rstrip("/")
+        callback_uri = f"{base}/auth/epic/callback"
+        tokens = await asyncio.to_thread(exchange_code, code, callback_uri)
     except Exception as e:
         # Truncate to 120 chars so the error fits in a URL query parameter
         return RedirectResponse(f"/?auth_error={quote_plus(str(e)[:120])}")
@@ -603,25 +607,28 @@ def _fetch_steam(creds: dict) -> list[dict]:
 
 
 def _fetch_epic(creds: dict) -> list[dict]:
-    """Fetch the Epic library, automatically retrying with a token refresh on failure.
+    """Fetch the Epic library, automatically retrying with a token refresh on 401.
 
     Epic access tokens expire after ~2 hours. Rather than forcing re-authentication,
-    we silently try a token refresh on the first exception and retry the fetch.
-    If the refresh also fails, the original exception propagates to the caller.
+    we silently refresh on HTTP 401 and retry once. Non-auth errors (network failures,
+    malformed API responses, etc.) propagate immediately without a refresh attempt.
     """
+    import requests as _req
     from game_recommender.epic import get_epic_library, refresh_tokens
     try:
         games = get_epic_library(creds["access_token"])
-    except Exception:
-        # Token may have expired — try refreshing before giving up
-        if creds.get("refresh_token"):
-            new_tokens = refresh_tokens(creds["refresh_token"])
-            # Update the in-memory credentials so subsequent calls use the new token
-            creds["access_token"]  = new_tokens["access_token"]
-            creds["refresh_token"] = new_tokens.get("refresh_token", creds["refresh_token"])
-            games = get_epic_library(creds["access_token"])
-        else:
-            raise  # No refresh token available — propagate the original error
+    except _req.HTTPError as exc:
+        # Only attempt refresh for authentication failures (401 Unauthorized).
+        # Other HTTP errors (5xx, rate limits, etc.) are not fixed by refreshing.
+        if exc.response is not None and exc.response.status_code != 401:
+            raise
+        if not creds.get("refresh_token"):
+            raise  # No refresh token — user must re-authenticate
+        new_tokens = refresh_tokens(creds["refresh_token"])
+        # Update the in-memory credentials so subsequent calls use the new token
+        creds["access_token"]  = new_tokens["access_token"]
+        creds["refresh_token"] = new_tokens.get("refresh_token", creds["refresh_token"])
+        games = get_epic_library(creds["access_token"])
     return [_game_to_dict(g) for g in games]
 
 
