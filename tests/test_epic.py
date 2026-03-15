@@ -198,27 +198,35 @@ class TestGetEpicLibrary:
         assert len(games) == 1
         assert games[0].name == "Real Game"
 
-    def test_falls_back_to_app_name_when_no_metadata_title(self):
-        """When metadata.title is absent, appName is used as the game title."""
+    def test_skips_record_with_no_metadata_title(self):
+        """Records without metadata.title are internal entitlements and are skipped.
+
+        appName values like "Arrowroot", "bobcat", "prokofiev" are Epic codenames —
+        falling back to them would surface internal noise, not real game titles.
+        """
         resp = _library_resp([
-            {"appName": "FallbackName", "catalogId": "c1", "metadata": {}},
+            {"appName": "Arrowroot", "catalogId": "c1", "metadata": {}},
+            {"appName": "real",      "catalogId": "c2", "metadata": {"title": "Real Game"}},
         ])
         with patch("game_recommender.epic.requests.Session") as MockSession:
             MockSession.return_value = self._mock_session(resp)
             games = get_epic_library("tok")
 
-        assert games[0].name == "FallbackName"
+        assert len(games) == 1
+        assert games[0].name == "Real Game"
 
-    def test_falls_back_to_catalog_id_when_no_app_name_or_title(self):
-        """When both metadata.title and appName are missing, catalogId is used."""
+    def test_skips_record_with_null_metadata(self):
+        """Records where metadata itself is null/absent are also skipped."""
         resp = _library_resp([
-            {"catalogId": "cat123", "metadata": {}},  # no appName
+            {"appName": "bobcat", "catalogId": "c1"},  # no metadata key at all
+            {"appName": "real",   "catalogId": "c2", "metadata": {"title": "Real Game"}},
         ])
         with patch("game_recommender.epic.requests.Session") as MockSession:
             MockSession.return_value = self._mock_session(resp)
             games = get_epic_library("tok")
 
-        assert games[0].name == "cat123"
+        assert len(games) == 1
+        assert games[0].name == "Real Game"
 
     def test_skips_blank_titles(self):
         """Records with blank or whitespace-only titles are silently skipped."""

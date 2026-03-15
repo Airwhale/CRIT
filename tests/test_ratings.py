@@ -122,7 +122,7 @@ class TestGetGameRatingSuccess:
         """RAWG can return many tags; we cap at 10 to avoid prompt bloat."""
         result = {**WITCHER_RESULT, "tags": [{"name": f"Tag{i}"} for i in range(20)]}
         with patch("game_recommender.ratings.requests.get", return_value=_rawg_resp([result])):
-            rating = get_game_rating("Game", api_key="key")
+            rating = get_game_rating("The Witcher 3", api_key="key")
 
         assert len(rating.tags) == 10  # Capped, not 20
 
@@ -243,7 +243,11 @@ class TestGetGameRatingCornerCases:
         assert rating.tags == []               # Missing field → empty list
 
     def test_result_missing_name_falls_back_to_query_name(self):
-        """If the result has no 'name' key, the original query string is used as the name."""
+        """If the result has no 'name' key, the original query string is used as the name.
+
+        The name-match check uses the query name as the fallback when the result
+        has no 'name' field, so a nameless result is always treated as matching.
+        """
         with patch("game_recommender.ratings.requests.get",
                    return_value=_rawg_resp([{"rating": 4.0}])):  # no "name" key
             rating = get_game_rating("My Query", api_key="key")
@@ -254,7 +258,7 @@ class TestGetGameRatingCornerCases:
         """[:10] slice on a list shorter than 10 returns all elements — no truncation."""
         result = {**WITCHER_RESULT, "tags": [{"name": f"Tag{i}"} for i in range(5)]}
         with patch("game_recommender.ratings.requests.get", return_value=_rawg_resp([result])):
-            rating = get_game_rating("Game", api_key="key")
+            rating = get_game_rating("The Witcher 3", api_key="key")
 
         assert len(rating.tags) == 5  # All 5 returned, not capped
 
@@ -262,7 +266,7 @@ class TestGetGameRatingCornerCases:
         """A result with an empty tags list should produce an empty list (not None)."""
         result = {**WITCHER_RESULT, "tags": []}
         with patch("game_recommender.ratings.requests.get", return_value=_rawg_resp([result])):
-            rating = get_game_rating("Game", api_key="key")
+            rating = get_game_rating("The Witcher 3", api_key="key")
 
         assert rating.tags == []
 
@@ -279,7 +283,7 @@ class TestGetGameRatingCornerCases:
         """genres: [] in API result should produce an empty genres list (not None)."""
         result = {**WITCHER_RESULT, "genres": []}
         with patch("game_recommender.ratings.requests.get", return_value=_rawg_resp([result])):
-            rating = get_game_rating("Game", api_key="key")
+            rating = get_game_rating("The Witcher 3", api_key="key")
 
         assert rating.genres == []
 
@@ -292,3 +296,28 @@ class TestGetGameRatingCornerCases:
 
         # Both names required a network call (different cache keys)
         assert mock_get.call_count == 2
+
+    def test_unrelated_result_name_returns_none(self):
+        """If the RAWG result name shares no words with the query, it is treated as a miss.
+
+        This prevents short or ambiguous titles (e.g. "Dispatch") from being
+        matched to a completely different game and inheriting its Metacritic score.
+        """
+        unrelated = {**WITCHER_RESULT, "name": "Portal 2"}  # Nothing in common with "Dispatch"
+        with patch("game_recommender.ratings.requests.get",
+                   return_value=_rawg_resp([unrelated])):
+            rating = get_game_rating("Dispatch", api_key="key")
+
+        assert rating is None
+
+    def test_subtitle_difference_still_matches(self):
+        """A result with extra subtitle text still matches if it shares the core words.
+
+        "The Witcher 3" searched → "The Witcher 3: Wild Hunt" returned → accepted.
+        """
+        with patch("game_recommender.ratings.requests.get",
+                   return_value=_rawg_resp([WITCHER_RESULT])):
+            rating = get_game_rating("The Witcher 3", api_key="key")
+
+        assert rating is not None
+        assert rating.metacritic_score == 93

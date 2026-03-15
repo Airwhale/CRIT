@@ -1108,7 +1108,7 @@ def _build_discover_prompt(games: list[dict], preferences: str, count: int) -> s
             line += f" | {', '.join(g['genres'][:3])}"
         lines.append(line)
 
-    owned_titles = ", ".join(g["name"] for g in games[:20])
+    owned_names = "\n".join(f"- {g['name']}" for g in games)
     prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
 
     if count > 10:
@@ -1129,12 +1129,13 @@ End with a one-sentence note on the common thread running through your picks."""
 
     return f"""You are a gaming advisor with encyclopedic knowledge of games across all platforms and eras.
 
-**PLAYER'S LIBRARY (taste profile — games they already own):**
+**PLAYER'S TASTE PROFILE (games they already own — DO NOT recommend any of these):**
 {chr(10).join(lines)}
 {prefs_section}
 
-Based on this player's taste, recommend exactly {count} games they are likely to love but probably don't own yet. You are not limited to any list — draw on your full knowledge of games across Steam, Epic, GOG, consoles, and any platform.
+**COMPLETE LIST OF OWNED GAMES (every title below is already owned — never recommend these):**
+{owned_names}
 
-Do not recommend games they already own. Known owned titles include: {owned_titles}{", and others listed above" if len(games) > 20 else ""}.
+Based on this player's demonstrated taste, recommend exactly {count} games they do not own. Draw on your full knowledge of games across Steam, Epic, GOG, consoles, and any platform. Every game you recommend must be absent from the owned list above.
 
 {format_instructions}"""

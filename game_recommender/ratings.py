@@ -14,6 +14,7 @@ Rate limiting: RAWG asks that clients be "polite." We enforce a default
 """
 
 import os
+import re
 import time
 import requests
 from requests.exceptions import HTTPError
@@ -22,6 +23,32 @@ from .models import GameRating
 
 
 RAWG_API_BASE = "https://api.rawg.io/api"
+
+_STOP_WORDS = {"the", "a", "an", "of", "in", "on", "at", "to", "and", "or", "is", "its", "for"}
+
+
+def _names_match(query: str, result: str) -> bool:
+    """Return True if the RAWG result name plausibly matches the queried name.
+
+    Normalises both strings to lowercase alphanumeric tokens, filters stop words,
+    then checks whether any significant query token appears (as a substring) in
+    the normalised result. This catches:
+      - Subtitle differences  ("The Witcher 3" → "The Witcher 3: Wild Hunt") ✓
+      - Colon / punctuation  ("Life is Feudal: MMO" → "Life is Feudal MMO")  ✓
+      - Completely wrong matches ("Dispatch" → "Portal 2")                   ✗ → None
+    """
+    def _tokens(s: str) -> list[str]:
+        return [
+            w for w in re.sub(r"[^a-z0-9 ]", " ", s.lower()).split()
+            if len(w) > 2 and w not in _STOP_WORDS
+        ]
+
+    q_tokens = _tokens(query)
+    if not q_tokens:
+        return True  # Can't evaluate — accept rather than discard
+
+    r_norm = re.sub(r"[^a-z0-9 ]", " ", result.lower())
+    return any(tok in r_norm for tok in q_tokens)
 
 # Module-level cache: maps lowercase game name → GameRating (or None if not found).
 # Persists for the lifetime of the process, so repeated calls within a session
@@ -116,6 +143,16 @@ def get_game_rating(
         return None
 
     r = results[0]
+
+    # Sanity-check: if the returned name shares no significant word with the query
+    # the search returned an unrelated game (common for short/ambiguous titles).
+    # Treat it as a miss so we don't attach a wrong Metacritic score to the game.
+    # Fall back to game_name when the result has no "name" — a nameless result
+    # can't be verified but shouldn't be discarded on that basis alone.
+    result_name = r.get("name") or game_name
+    if not _names_match(game_name, result_name):
+        _SEARCH_CACHE[cache_key] = None
+        return None
 
     # Build the GameRating from the first (best-matching) result
     rating = GameRating(

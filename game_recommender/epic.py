@@ -180,15 +180,15 @@ def get_epic_library(access_token: str) -> list[Game]:
         metadata = r.get("metadata") or {}
         raw_title = metadata.get("title")
 
-        # Fall back to appName, then catalogId only when the field is absent (None),
-        # not when it is present but blank — a blank string signals an explicitly
-        # cleared/invalid title and should not trigger a fallback.
-        if raw_title is None:
-            raw_title = r.get("appName")
-        if raw_title is None:
-            raw_title = r.get("catalogId")
+        # Only metadata.title is the human-readable name set by Epic's catalog.
+        # appName and catalogId are internal identifiers / codenames (e.g.
+        # "Arrowroot", "bobcat", "prokofiev") that are never shown to users.
+        # Records with no metadata.title are internal engine/service entitlements
+        # and must be skipped — falling back to appName would surface those codenames.
+        if not raw_title:
+            continue
 
-        title = (raw_title or "").strip()
+        title = raw_title.strip()
 
         # Skip entries with no title, 32-char all-alphanumeric internal IDs, or duplicates
         if not title or (len(title) == 32 and title.isalnum()) or title in seen:
