@@ -612,6 +612,7 @@
       </div>
       <input type="file" id="csv-import-input-load" accept=".csv" style="display:none" onchange="importCSV(this)">
       <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.85rem;padding:0.45rem 1rem;border-radius:var(--radius);cursor:pointer;" onclick="document.getElementById('csv-import-input-load').click()">⬆ Import CSV</button>
+      <div id="library-load-status" style="margin-top:0.75rem;"></div>
     </div>
 
     <div id="library-content" hidden>
@@ -914,11 +915,11 @@ async function loadLibrary() {
   const skipRatings = document.getElementById('skip-ratings').checked;
   const rawgLimitVal = document.getElementById('rawg-limit').value.trim();
   const rawgLimit    = rawgLimitVal ? parseInt(rawgLimitVal, 10) : null;
-  const loadArea = document.getElementById('library-load-area');
+  const loadStatus = document.getElementById('library-load-status');
   const content = document.getElementById('library-content');
   const errDiv = document.getElementById('library-errors');
 
-  loadArea.innerHTML = '<span class="spinner"></span> Loading your library…<br><small style="color:var(--muted);margin-top:4px;display:block;">Fetching games and RAWG ratings — large libraries (800+ games) can take several minutes. Use the limit input above to cap enrichment and speed things up.</small>';
+  loadStatus.innerHTML = '<span class="spinner"></span> Loading your library…<br><small style="color:var(--muted);margin-top:4px;display:block;">Fetching games and RAWG ratings — large libraries (800+ games) can take several minutes. Use the limit input above to cap enrichment and speed things up.</small>';
   content.setAttribute('hidden', '');
   errDiv.innerHTML = '';
 
@@ -952,17 +953,9 @@ async function loadLibrary() {
     document.getElementById('viz-section').removeAttribute('hidden');
     renderGenreBubbles();
 
-    loadArea.innerHTML = `
-      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;margin-bottom:0.75rem;cursor:pointer;">
-        <input type="checkbox" id="skip-ratings" ${skipRatings ? 'checked' : ''}> Skip RAWG ratings (faster)
-      </label>
-      <button class="load-library-btn" onclick="loadLibrary()">Load Library</button>
-    `;
+    loadStatus.innerHTML = '';
   } catch(e) {
-    loadArea.innerHTML = `
-      <div class="notice error visible">Failed to load library: ${e.message}</div>
-      <button class="load-library-btn" onclick="loadLibrary()" style="margin-top:0.75rem;">Retry</button>
-    `;
+    loadStatus.innerHTML = `<div class="notice error visible">Failed to load library: ${e.message}</div>`;
   }
 }
 
