@@ -360,7 +360,7 @@ class TestRecommend:
 
         claude_chunks: list of text strings yielded by the fake Claude stream
         extra_games:   override FAKE_GAMES for games returned by _fetch_steam
-        mode:          recommendation mode (library / new / sales)
+        mode:          recommendation mode (library / new / sales / discover)
         **params:      extra query string parameters (e.g. count=5, preferences=...)
         """
         games = FAKE_GAMES if extra_games is None else extra_games
@@ -414,6 +414,20 @@ class TestRecommend:
         assert resp.status_code == 200
         events = parse_sse(resp.text)
         assert any(e.get("done") is True for e in events)
+
+    def test_discover_mode_streams_completion(self, client):
+        """Discover mode: streams status, text, and done — no external data needed."""
+        session_id = "sess-rec-discover"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        resp = self._recommend(client, session_id, mode="discover",
+                               claude_chunks=["Try Hollow Knight, Celeste, and Hades!"])
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        assert any(e.get("done") is True for e in events)
+        full_text = "".join(e["text"] for e in events if "text" in e)
+        assert "Hollow Knight" in full_text
 
     def test_sales_mode_fetches_deals(self, client):
         """Sales mode: fetches sale data and streams a completion."""

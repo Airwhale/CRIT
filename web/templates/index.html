@@ -586,9 +586,10 @@
 
     <!-- Mode tabs -->
     <div class="mode-tabs">
-      <button class="mode-tab active" data-mode="library" onclick="setMode('library')">🎮 From Library</button>
-      <button class="mode-tab"        data-mode="sales"   onclick="setMode('sales')">🛒 Steam Deals</button>
-      <button class="mode-tab"        data-mode="new"     onclick="setMode('new')">📦 Backlog</button>
+      <button class="mode-tab active" data-mode="library"  onclick="setMode('library')">🎮 From Library</button>
+      <button class="mode-tab"        data-mode="sales"    onclick="setMode('sales')">🛒 Steam Deals</button>
+      <button class="mode-tab"        data-mode="new"      onclick="setMode('new')">📦 Backlog</button>
+      <button class="mode-tab"        data-mode="discover" onclick="setMode('discover')">🌐 Discover</button>
     </div>
 
     <!-- Sales mode options -->
@@ -612,6 +613,11 @@
         <input type="number" id="max-new-minutes" value="60" min="0" max="600" step="15" style="margin:0 4px;">
         minutes played
       </label>
+    </div>
+
+    <!-- Discover mode options -->
+    <div class="mode-opts" id="opts-discover" hidden>
+      <small style="color:var(--muted);">Claude will recommend games you don't own yet, drawing on its knowledge of the entire gaming universe. Your library is used only as a taste profile.</small>
     </div>
 
     <div class="prefs-row">
@@ -940,8 +946,9 @@ function setMode(mode) {
   document.querySelectorAll('.mode-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.mode === mode);
   });
-  document.getElementById('opts-sales').hidden = (mode !== 'sales');
-  document.getElementById('opts-new').hidden   = (mode !== 'new');
+  document.getElementById('opts-sales').hidden    = (mode !== 'sales');
+  document.getElementById('opts-new').hidden      = (mode !== 'new');
+  document.getElementById('opts-discover').hidden = (mode !== 'discover');
 }
 
 // ── Recommendations ────────────────────────────────────────────────────────────

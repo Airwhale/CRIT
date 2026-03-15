@@ -449,7 +449,9 @@ SSE generator logic:
    error if no deals; build prompt with `_build_sales_prompt`
 3. **Mode "new"**: filter `games_raw` where `playtime_minutes <= max_new_minutes`;
    error if none; build prompt with `_build_new_game_prompt`
-4. **Mode "library"**: build prompt with `_build_library_prompt`
+4. **Mode "discover"**: build prompt with `_build_discover_prompt` (no extra data fetch —
+   Claude draws on its own knowledge to recommend any unowned game)
+5. **Mode "library"**: build prompt with `_build_library_prompt`
 5. Yield status "Asking Claude…"
 6. Use `anthropic.AsyncAnthropic` with `client.messages.stream()`;
    yield each text chunk as `{"text": chunk}`;
@@ -477,6 +479,14 @@ SSE generator logic:
 - Unplayed lines (up to 80): `- {name} ({PLATFORM}) | {mins}min | RAWG score | genres`
 - Ask Claude to recommend N unplayed games, each with: "Why start now", "What to expect", "Best entry point"
 - End with sentence about the hidden gem in the list
+
+**`_build_discover_prompt(games, preferences, count)`**:
+- Library lines (up to 100): `- {name} ({PLATFORM}) | {X}h played | genres` (taste profile only)
+- Instructs Claude to recommend games the player does NOT own, drawing freely on its
+  full knowledge of games across all platforms and eras
+- Lists up to 20 owned titles inline so Claude avoids suggesting them
+- Each recommendation: "Why it fits", "What makes it special", "Where to get it"
+- End with a note on the common thread running through the picks
 
 ---
 
@@ -516,9 +526,10 @@ Platform card turns green-bordered when connected.
 - Max 500 rows displayed
 
 **Step 3 — Recommendations** (hidden until library loaded):
-- Three mode tabs: "🎮 From Library" / "🛒 Steam Deals" / "📦 Backlog"
+- Four mode tabs: "🎮 From Library" / "🛒 Steam Deals" / "📦 Backlog" / "🌐 Discover"
 - Sales options panel (hidden unless sales mode): min discount slider (10–80%, step 10) + wishlist checkbox
 - Backlog options panel (hidden unless backlog mode): max minutes input (default 60)
+- Discover options panel (hidden unless discover mode): explanatory note only (no inputs)
 - Preferences textarea (max 500 chars) + picks count input (1–10) + "✨ Recommend" button
 - Output div: shows status line with spinner during loading, then streams Claude markdown
   rendered via `marked.parse` + `DOMPurify.sanitize`. Blinking cursor while streaming.
@@ -683,6 +694,7 @@ Cover:
   - library mode streams status + text + done
   - new mode filters unplayed games (≤ max_new_minutes)
   - sales mode fetches deals
+  - discover mode streams completion (no external data fetch)
   - preferences included in stream (passed to prompt builder)
   - no session returns 400; missing ANTHROPIC_API_KEY returns 400; invalid mode 400;
     preferences > 500 chars returns 400

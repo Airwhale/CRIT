@@ -746,7 +746,7 @@ async def recommend(
         raise HTTPException(400, "ANTHROPIC_API_KEY not configured on the server")
     if not session:
         raise HTTPException(400, "No platforms connected")
-    if mode not in ("library", "sales", "new"):
+    if mode not in ("library", "sales", "new", "discover"):
         raise HTTPException(400, f"Unknown mode: {mode}")
     if len(preferences) > 500:
         raise HTTPException(400, "preferences must be 500 characters or fewer")
@@ -819,6 +819,9 @@ async def recommend(
                 yield f'data: {json.dumps({"error": "No unplayed games found in your library."})}\n\n'
                 return
             prompt = _build_new_game_prompt(games_raw, unplayed, preferences, count)
+
+        elif mode == "discover":
+            prompt = _build_discover_prompt(games_raw, preferences, count)
 
         else:  # mode == "library"
             prompt = _build_library_prompt(games_raw, preferences, count)
@@ -1088,3 +1091,50 @@ Here is the player's game library with playtime and ratings:
 {format_instructions}
 
 Be specific and grounded in their actual library. Only recommend games listed above."""
+
+
+def _build_discover_prompt(games: list[dict], preferences: str, count: int) -> str:
+    """Build a prompt asking Claude to recommend any games the player doesn't own.
+
+    The player's library is used purely as a taste profile — Claude is free to
+    recommend anything in its knowledge base, with no constraint to owned games.
+    """
+    lines = []
+    for g in games[:100]:
+        line = f"- {g['name']} ({g['platform'].upper()})"
+        if g["playtime_minutes"] > 0:
+            line += f" | {round(g['playtime_minutes'] / 60, 1)}h played"
+        if g.get("genres"):
+            line += f" | {', '.join(g['genres'][:3])}"
+        lines.append(line)
+
+    owned_titles = ", ".join(g["name"] for g in games[:20])
+    prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
+
+    if count > 10:
+        format_instructions = f"""List exactly {count} games. For each, use this compact format:
+
+**N. Game Name** (Platform) — One sentence on why it suits this player.
+
+No other commentary. Just the numbered list."""
+    else:
+        format_instructions = f"""Recommend exactly {count} games. For each:
+
+1. **Game Name** (Platform, Release Year)
+   - **Why it fits:** 2–3 sentences connecting it to games they already love
+   - **What makes it special:** The one thing that makes it stand out
+   - **Where to get it:** Steam / Epic / GOG / console — and roughly what it costs
+
+End with a one-sentence note on the common thread running through your picks."""
+
+    return f"""You are a gaming advisor with encyclopedic knowledge of games across all platforms and eras.
+
+**PLAYER'S LIBRARY (taste profile — games they already own):**
+{chr(10).join(lines)}
+{prefs_section}
+
+Based on this player's taste, recommend exactly {count} games they are likely to love but probably don't own yet. You are not limited to any list — draw on your full knowledge of games across Steam, Epic, GOG, consoles, and any platform.
+
+Do not recommend games they already own. Known owned titles include: {owned_titles}{", and others listed above" if len(games) > 20 else ""}.
+
+{format_instructions}"""
