@@ -736,13 +736,14 @@ class TestLibraryCornerCases:
         assert any(e["platform"] == "steam" for e in data["errors"])
 
     def test_top_75_boundary_76th_game_not_enriched(self, client, monkeypatch):
-        """Only the top 75 games by playtime are passed to RAWG; the 76th is skipped.
+        """When RAWG_ENRICHMENT_LIMIT=75, the 76th game is not enriched.
 
-        The endpoint sorts games by playtime descending, then slices [:75] before
+        The endpoint sorts games by playtime descending, then slices [:limit] before
         enrichment.  The 76th game (lowest playtime) is returned in the response
         but with rawg_rating=None because it was never sent to RAWG.
         """
         monkeypatch.setenv("RAWG_API_KEY", "rawg-key")
+        monkeypatch.setenv("RAWG_ENRICHMENT_LIMIT", "75")
         session_id = "sess-76"
         _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
 
@@ -771,12 +772,13 @@ class TestLibraryCornerCases:
         assert last_game["rawg_rating"] is None
 
     def test_exactly_75_games_all_enriched(self, client, monkeypatch):
-        """With exactly 75 games all_games[:75] == all_games — every one is enriched.
+        """With RAWG_ENRICHMENT_LIMIT=75 and exactly 75 games, every game is enriched.
 
         This verifies the boundary from the other side: 75 games means no game
         is left out of the enrichment step.
         """
         monkeypatch.setenv("RAWG_API_KEY", "rawg-key")
+        monkeypatch.setenv("RAWG_ENRICHMENT_LIMIT", "75")
         session_id = "sess-75-exact"
         _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
 
@@ -798,6 +800,35 @@ class TestLibraryCornerCases:
         called_with = mock_enrich.call_args[0][0]
         assert len(called_with) == 75
         # All 75 should have ratings in the response
+        assert all(g["rawg_rating"] == 4.0 for g in resp.json()["games"])
+
+    def test_no_limit_env_var_enriches_all_games(self, client, monkeypatch):
+        """Without RAWG_ENRICHMENT_LIMIT set, every game in the library is enriched.
+
+        This is the default behaviour: no cap, all games get RAWG data.
+        """
+        monkeypatch.setenv("RAWG_API_KEY", "rawg-key")
+        monkeypatch.delenv("RAWG_ENRICHMENT_LIMIT", raising=False)
+        session_id = "sess-no-limit"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        games_100 = [
+            {"name": f"Game {i:03d}", "platform": "steam", "app_id": str(i),
+             "playtime_minutes": 200 - i,
+             "rawg_rating": None, "metacritic": None, "genres": []}
+            for i in range(100)
+        ]
+
+        def fake_enrich(games, api_key):
+            return [{**g, "rawg_rating": 4.0} for g in games]
+
+        with patch("web.app._fetch_steam", return_value=games_100), \
+             patch("web.app._enrich_with_rawg", side_effect=fake_enrich) as mock_enrich:
+            resp = client.get("/api/library", cookies={"session_id": session_id})
+
+        # All 100 games should be passed to enrichment — no limit applied
+        called_with = mock_enrich.call_args[0][0]
+        assert len(called_with) == 100
         assert all(g["rawg_rating"] == 4.0 for g in resp.json()["games"])
 
 

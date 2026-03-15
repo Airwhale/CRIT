@@ -522,9 +522,9 @@ async def get_library(
     A failure in one platform (e.g. expired token, private profile) is recorded
     in the "errors" list but doesn't prevent the other platforms from returning.
 
-    Post-fetch RAWG enrichment: The top 75 games by playtime are sent to RAWG
-    to get ratings and genre data. The limit keeps load time under ~20 seconds
-    on a typical connection (75 × 0.25s delay + HTTP latency).
+    Post-fetch RAWG enrichment: by default every game is enriched. Set the
+    RAWG_ENRICHMENT_LIMIT environment variable to an integer to cap the number
+    of games enriched (useful on large libraries to reduce load time).
 
     Returns:
         {"games": [...], "errors": [...]}
@@ -567,8 +567,11 @@ async def get_library(
     rawg_key = os.environ.get("RAWG_API_KEY")
     if not skip_ratings and rawg_key and all_games:
         try:
-            enriched = await asyncio.to_thread(_enrich_with_rawg, all_games[:75], rawg_key)
-            all_games = enriched + all_games[75:]
+            _limit_str = os.environ.get("RAWG_ENRICHMENT_LIMIT", "").strip()
+            limit = int(_limit_str) if _limit_str.isdigit() else None
+            to_enrich = all_games[:limit] if limit is not None else all_games
+            enriched = await asyncio.to_thread(_enrich_with_rawg, to_enrich, rawg_key)
+            all_games = enriched + (all_games[limit:] if limit is not None else [])
         except Exception as e:
             # RAWG failure is non-fatal — games still display without ratings
             errors.append({"platform": "rawg", "error": str(e)})
