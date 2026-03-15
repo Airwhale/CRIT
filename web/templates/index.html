@@ -995,12 +995,11 @@ async function loadLibrary() {
 }
 
 function renderLibraryTable(games) {
-  const MAX_DISPLAY = 500;
   const tbody = document.getElementById('game-table-body');
   const showing = document.getElementById('lib-showing');
   document.getElementById('lib-count').textContent = `${games.length} games`;
 
-  const rows = games.slice(0, MAX_DISPLAY).map(g => {
+  const rows = games.map(g => {
     const hours = g.playtime_minutes > 0
       ? `<span class="playtime played">${(g.playtime_minutes/60).toFixed(1)}h</span>`
       : `<span class="playtime">unplayed</span>`;
@@ -1031,11 +1030,7 @@ function renderLibraryTable(games) {
   }).join('');
 
   tbody.innerHTML = rows;
-  if (games.length > MAX_DISPLAY) {
-    showing.textContent = `Showing ${MAX_DISPLAY} of ${games.length} games`;
-  } else {
-    showing.textContent = '';
-  }
+  showing.textContent = '';
 }
 
 function filterLibrary() {

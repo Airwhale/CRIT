@@ -643,6 +643,21 @@ def _fetch_gog(creds: dict) -> list[dict]:
     return [_game_to_dict(g) for g in games]
 
 
+def _fix_mojibake(s: str) -> str:
+    """Fix strings that are UTF-8 bytes decoded as Latin-1 (mojibake).
+
+    Some platform APIs return UTF-8 encoded strings but the HTTP layer
+    misidentifies the charset, causing characters like emoji to appear as
+    sequences like ðŸŸ¦ instead of 🟦. Re-encoding as Latin-1 and decoding
+    as UTF-8 recovers the original string. If the string is already correct
+    UTF-8, this is a no-op.
+    """
+    try:
+        return s.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
 def _game_to_dict(game) -> dict:
     """Serialize a Game dataclass to a JSON-compatible dict.
 
@@ -651,7 +666,7 @@ def _game_to_dict(game) -> dict:
     games that have RAWG data.
     """
     return {
-        "name":             game.name,
+        "name":             _fix_mojibake(game.name),
         "platform":         game.platform,
         "app_id":           game.app_id,
         "playtime_minutes": game.playtime_minutes,
