@@ -875,7 +875,6 @@ async def recommend(
             async with client.messages.stream(
                 model="claude-opus-4-6",
                 max_tokens=4096,
-                thinking={"type": "adaptive"},  # Claude decides if extended thinking helps
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 # Yield each text chunk as it arrives — the browser renders it immediately
