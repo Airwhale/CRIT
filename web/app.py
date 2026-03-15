@@ -655,6 +655,7 @@ def _game_to_dict(game) -> dict:
         "platform":         game.platform,
         "app_id":           game.app_id,
         "playtime_minutes": game.playtime_minutes,
+        "last_played":      game.last_played,
         "rawg_rating":      None,   # Populated by _enrich_with_rawg if called
         "metacritic":       None,   # Populated by _enrich_with_rawg if called
         "genres":           [],     # Populated by _enrich_with_rawg if called

@@ -569,6 +569,7 @@
         </select>
         <select id="lib-sort" onchange="sortLibrary()">
           <option value="playtime">Sort: Playtime</option>
+          <option value="last_played">Sort: Last Played</option>
           <option value="name">Sort: Name</option>
           <option value="rating">Sort: RAWG Rating</option>
           <option value="metacritic">Sort: Metacritic</option>
@@ -585,11 +586,12 @@
         <table class="game-table">
           <thead>
             <tr>
-              <th style="width:42%">Game</th>
-              <th style="width:10%">Platform</th>
-              <th style="width:13%">Playtime</th>
-              <th style="width:10%">RAWG</th>
-              <th style="width:12%">Metacritic</th>
+              <th style="width:36%">Game</th>
+              <th style="width:9%">Platform</th>
+              <th style="width:11%">Playtime</th>
+              <th style="width:12%">Last Played</th>
+              <th style="width:9%">RAWG</th>
+              <th style="width:10%">Metacritic</th>
               <th style="width:13%">Genres</th>
             </tr>
           </thead>
@@ -1002,6 +1004,14 @@ function renderLibraryTable(games) {
     const hours = g.playtime_minutes > 0
       ? `<span class="playtime played">${(g.playtime_minutes/60).toFixed(1)}h</span>`
       : `<span class="playtime">unplayed</span>`;
+    let lastPlayed = '<span style="color:var(--border)">—</span>';
+    if (g.last_played) {
+      const ts = parseInt(g.last_played, 10);
+      const d = isNaN(ts) ? new Date(g.last_played) : new Date(ts * 1000);
+      if (!isNaN(d.getTime())) {
+        lastPlayed = `<span style="color:var(--muted);font-size:0.8rem;">${d.toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'})}</span>`;
+      }
+    }
     const rawg = g.rawg_rating
       ? `<span class="rating-cell">★ ${g.rawg_rating.toFixed(1)}</span>`
       : '<span style="color:var(--border)">—</span>';
@@ -1013,6 +1023,7 @@ function renderLibraryTable(games) {
       <td>${escHtml(g.name)}</td>
       <td><span class="badge badge-${g.platform}">${g.platform}</span></td>
       <td>${hours}</td>
+      <td>${lastPlayed}</td>
       <td>${rawg}</td>
       <td>${mc}</td>
       <td style="color:var(--muted);font-size:0.78rem;">${escHtml(genres)}</td>
@@ -1044,6 +1055,11 @@ function sortLibrary() {
   const sortBy = document.getElementById('lib-sort').value;
   const sorted = [...filteredGames];
   if (sortBy === 'playtime') sorted.sort((a,b) => b.playtime_minutes - a.playtime_minutes);
+  else if (sortBy === 'last_played') sorted.sort((a,b) => {
+    const ta = a.last_played ? parseInt(a.last_played, 10) || 0 : 0;
+    const tb = b.last_played ? parseInt(b.last_played, 10) || 0 : 0;
+    return tb - ta;
+  });
   else if (sortBy === 'name') sorted.sort((a,b) => a.name.localeCompare(b.name));
   else if (sortBy === 'rating') sorted.sort((a,b) => (b.rawg_rating||0) - (a.rawg_rating||0));
   else if (sortBy === 'metacritic') sorted.sort((a,b) => (b.metacritic||0) - (a.metacritic||0));
