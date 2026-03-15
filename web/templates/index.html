@@ -511,22 +511,15 @@
           <span class="pf-status" id="gog-status">Not connected</span>
         </div>
         <div class="pf-body" id="gog-form">
-          <button class="btn-platform btn-gog" id="gog-connect-btn" onclick="startGogAuth()">
-            Connect with GOG →
-          </button>
-          <!-- Shown immediately when popup opens -->
-          <div id="gog-waiting" style="display:none;margin-top:0.75rem;">
-            <div class="code-instructions">
-              <div class="step">1. Log in to GOG in the popup</div>
-              <div class="step" style="margin-top:6px;">2. When it redirects, the URL will contain <code style="color:var(--accent2)">code=XXXXX</code> — copy the full URL or just the code value and paste it below <strong style="color:var(--yellow);">immediately</strong> (it expires in ~30 seconds)</div>
-              <div class="row" style="gap:0.5rem;margin-top:8px;">
-                <input type="text" id="gog-code" placeholder="Paste code or full URL…">
-                <button style="background:var(--gog);color:#fff;white-space:nowrap;" onclick="submitGogCode()">Submit</button>
-              </div>
-              <div style="margin-top:6px;font-size:0.78rem;color:var(--muted);">
-                <span class="spinner" id="gog-spinner"></span>
-                <span id="gog-auto-status">Trying to capture automatically…</span>
-              </div>
+          <div class="code-instructions visible" id="gog-fallback">
+            <p>
+              1. Open <a href="https://login.gog.com/auth?client_id=46899977096215655&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success%3Forigin%3Dclient&response_type=code" target="_blank">this GOG login page</a> while logged in.<br>
+              2. After logging in, the URL bar will contain <code style="color:var(--accent2)">code=XXXXX</code> — copy that code value.<br>
+              3. Paste it below and click Connect.
+            </p>
+            <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:6px;">
+              <input type="text" id="gog-code" placeholder="Paste code or full URL…" style="width:100%;font-family:monospace;font-size:0.82rem;padding:0.4rem 0.6rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);box-sizing:border-box;">
+              <button class="btn-platform btn-gog" style="white-space:nowrap;align-self:flex-start;" onclick="submitGogCode()">Connect</button>
             </div>
           </div>
           <div class="notice error" id="gog-error" style="margin-top:4px;"></div>
@@ -672,8 +665,6 @@
 // ── State ──────────────────────────────────────────────────────────────────────
 let allGames = [];         // full library from API
 let filteredGames = [];    // after search/filter
-let _gogPopup = null;
-let _gogPollTimer = null;
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 (async function init() {
@@ -843,78 +834,17 @@ async function submitEpicCode() {
 }
 
 // ── GOG ────────────────────────────────────────────────────────────────────────
-// GOG's registered redirect URI is embed.gog.com — we can't receive it as a
-// server callback. Strategy:
-//   1. Open login in a popup and listen for window.postMessage from the success page.
-//      (GOG's on_login_success page is designed to communicate with an opener window.)
-//   2. Every 500ms, try to read popup.location.href — works once popup returns to
-//      same origin (won't for GOG, but costs nothing to try).
-//   3. After 90s with no auto-capture, show the URL-bar paste fallback.
+// GOG's registered redirect URI is fixed to embed.gog.com — we cannot receive
+// the callback ourselves. Users open the login link, log in, then copy the
+// code from the redirect URL and paste it here (same pattern as Epic).
 
-const GOG_AUTH_URL = 'https://login.gog.com/auth?client_id=46899977096215655' +
-  '&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success%3Forigin%3Dclient' +
-  '&response_type=code';
-
-function startGogAuth() {
+async function submitGogCode() {
   clearError('gog-error');
-  _gogCleanup();
-
-  _gogPopup = window.open(GOG_AUTH_URL, 'gog-auth', 'width=820,height=660,left=100,top=80');
-
-  // Show the paste UI immediately — the auth code expires in ~30s so the user
-  // must be ready to paste the moment GOG redirects after login.
-  document.getElementById('gog-waiting').style.display = 'block';
-  document.getElementById('gog-connect-btn').disabled = true;
-  document.getElementById('gog-code').focus();
-
-  // Strategy 1: postMessage from GOG's on_login_success page
-  window.addEventListener('message', _gogMessageHandler);
-
-  // Strategy 2: poll popup URL (works if it ever returns to same-origin; harmless otherwise)
-  _gogPollTimer = setInterval(_gogPollPopup, 500);
-}
-
-function _gogMessageHandler(event) {
-  // Accept any message that looks like an OAuth code from a gog.com origin
-  if (typeof event.origin === 'string' && !event.origin.includes('gog.com')) return;
-  try {
-    const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-    const code = data?.code || data?.authorizationCode || data?.authorization_code;
-    if (code) {
-      _gogCleanup();
-      _handleGogCode(code);
-    }
-  } catch(e) { /* not JSON or no code field */ }
-}
-
-function _gogPollPopup() {
-  if (!_gogPopup || _gogPopup.closed) {
-    _gogCleanup();
-    return;
-  }
-  try {
-    // Will throw SecurityError if cross-origin (expected for gog.com pages)
-    const href = _gogPopup.location.href;
-    const match = href.match(/[?&]code=([^&#]+)/);
-    if (match) {
-      _gogCleanup();
-      _gogPopup.close();
-      _handleGogCode(decodeURIComponent(match[1]));
-    }
-  } catch(e) { /* cross-origin — normal, keep polling */ }
-}
-
-function _gogCleanup() {
-  window.removeEventListener('message', _gogMessageHandler);
-  clearInterval(_gogPollTimer);
-  _gogPollTimer = null;
-  if (_gogPopup && !_gogPopup.closed) _gogPopup.close();
-  _gogPopup = null;
-  document.getElementById('gog-waiting').style.display = 'none';
-  document.getElementById('gog-connect-btn').disabled = false;
-}
-
-async function _handleGogCode(code) {
+  const raw = document.getElementById('gog-code').value.trim();
+  // Accept either a full redirect URL or just the bare code value
+  const match = raw.match(/[?&]code=([^&#]+)/);
+  const code = match ? decodeURIComponent(match[1]) : raw;
+  if (!code) { showError('gog-error', 'Paste the code from the URL bar first.'); return; }
   try {
     await apiFetch('/api/auth/gog', {
       method: 'POST',
@@ -922,21 +852,9 @@ async function _handleGogCode(code) {
       body: JSON.stringify({ auth_code: code }),
     });
     markConnected('gog');
-    document.getElementById('gog-fallback').style.display = 'none';
   } catch(e) {
     showError('gog-error', 'Auth failed: ' + e.message);
-    _showGogFallback();
   }
-}
-
-async function submitGogCode() {
-  clearError('gog-error');
-  let raw = document.getElementById('gog-code').value.trim();
-  // Accept full URL or just the code value
-  const match = raw.match(/[?&]code=([^&#]+)/);
-  const code = match ? decodeURIComponent(match[1]) : raw;
-  if (!code) { showError('gog-error', 'Paste the code from the URL bar first.'); return; }
-  await _handleGogCode(code);
 }
 
 // ── Disconnect ─────────────────────────────────────────────────────────────────
