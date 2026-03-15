@@ -1,1 +1,1 @@
-# Game Recommendation System
+# CRIT — Curated Recommendations In Titles

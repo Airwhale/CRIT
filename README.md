@@ -238,8 +238,8 @@ The app is a standard FastAPI/Uvicorn application. Any Linux server with Python 
 sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip
 
 # Clone and install
-git clone <repo-url> /opt/game-recommender
-cd /opt/game-recommender
+git clone <repo-url> /opt/crit
+cd /opt/crit
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -251,7 +251,7 @@ nano .env   # fill in ANTHROPIC_API_KEY and RAWG_API_KEY
 
 ### Run with systemd (recommended)
 
-Create `/etc/systemd/system/game-recommender.service`:
+Create `/etc/systemd/system/crit.service`:
 
 ```ini
 [Unit]
@@ -261,9 +261,9 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=/opt/game-recommender
-EnvironmentFile=/opt/game-recommender/.env
-ExecStart=/opt/game-recommender/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8000
+WorkingDirectory=/opt/crit
+EnvironmentFile=/opt/crit/.env
+ExecStart=/opt/crit/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8000
 Restart=on-failure
 RestartSec=5
 
@@ -273,8 +273,8 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now game-recommender
-sudo systemctl status game-recommender
+sudo systemctl enable --now crit
+sudo systemctl status crit
 ```
 
 ### Nginx reverse proxy (with HTTPS)
@@ -285,7 +285,7 @@ Install Nginx and Certbot:
 sudo apt install -y nginx certbot python3-certbot-nginx
 ```
 
-Create `/etc/nginx/sites-available/game-recommender`:
+Create `/etc/nginx/sites-available/crit`:
 
 ```nginx
 server {
@@ -315,7 +315,7 @@ server {
 Enable and get a certificate:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/game-recommender /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/crit /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d your-domain.com
 ```
@@ -335,8 +335,8 @@ CMD ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 ```bash
-docker build -t game-recommender .
-docker run -p 8000:8000 --env-file .env game-recommender
+docker build -t crit .
+docker run -p 8000:8000 --env-file .env crit
 ```
 
 Or with Docker Compose:

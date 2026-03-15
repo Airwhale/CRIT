@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Game Recommendation System — CLI entry point.
+CRIT — Curated Recommendations In Titles — CLI entry point.
 
 This module wires together all the game_recommender sub-modules into a
 single command-line workflow:
@@ -119,8 +119,8 @@ def main(
 ):
     """
     \b
-    Game Recommendation System
-    ──────────────────────────
+    CRIT — Curated Recommendations In Titles
+    ─────────────────────────────────────────
     Pulls your game libraries from Steam, Epic, and GOG,
     enriches them with ratings data from RAWG, and uses
     Claude AI to recommend what you should play next.

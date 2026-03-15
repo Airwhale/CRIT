@@ -1,4 +1,4 @@
-# LLM Instructions: Game Recommendation System
+# LLM Instructions: CRIT — Curated Recommendations In Titles
 
 This document contains everything an LLM coding assistant (e.g. Claude Code) needs to
 recreate this project from scratch. Follow each section in order.
@@ -29,7 +29,7 @@ project_root/
 ├── main.py
 ├── run_web.py
 ├── game_recommender/
-│   ├── __init__.py          (just a comment: "# Game Recommendation System")
+│   ├── __init__.py          (just a comment: "# CRIT — Curated Recommendations In Titles")
 │   ├── models.py
 │   ├── steam.py
 │   ├── epic.py
@@ -338,11 +338,11 @@ Shows "...and N more" footer if truncated.
 
 ```python
 #!/usr/bin/env python3
-"""Launch the Game Recommender web UI."""
+"""Launch the CRIT web UI."""
 import uvicorn
 
 if __name__ == "__main__":
-    print("Game Recommender → http://localhost:8000")
+    print("CRIT — Curated Recommendations In Titles → http://localhost:8000")
     uvicorn.run("web.app:app", host="0.0.0.0", port=8000, reload=True)
 ```
 
@@ -362,7 +362,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Red
 from dotenv import load_dotenv
 
 load_dotenv()
-app = FastAPI(title="Game Recommender")
+app = FastAPI(title="CRIT — Curated Recommendations In Titles")
 _COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 ```
 
