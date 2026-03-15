@@ -8,7 +8,23 @@ to restart the server manually.
 For production, set COOKIE_SECURE=true in your .env and run behind a
 reverse proxy (Nginx/Caddy) that handles TLS termination.
 """
+import shutil
+import sys
+from pathlib import Path
+
 import uvicorn
+
+_ROOT = Path(__file__).parent
+_ENV  = _ROOT / ".env"
+_EX   = _ROOT / ".env.example"
+
+if not _ENV.exists():
+    if _EX.exists():
+        shutil.copy(_EX, _ENV)
+        print("Created .env from .env.example — open it and fill in your API keys, then run again.")
+        sys.exit(0)
+    else:
+        print("Warning: no .env file found. Set ANTHROPIC_API_KEY (and optionally RAWG_API_KEY) as environment variables.")
 
 if __name__ == "__main__":
     print("CRIT — Curated Recommendations In Titles → http://localhost:8000")
