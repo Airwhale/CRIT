@@ -511,24 +511,22 @@
           <span class="pf-status" id="gog-status">Not connected</span>
         </div>
         <div class="pf-body" id="gog-form">
-          <small style="color:var(--muted);">A login popup will open. We'll try to capture the code automatically — if that fails, one paste from the URL bar is all you need.</small>
           <button class="btn-platform btn-gog" id="gog-connect-btn" onclick="startGogAuth()">
             Connect with GOG →
           </button>
-          <!-- Auto-capture status -->
-          <div id="gog-waiting" style="display:none;margin-top:0.5rem;">
-            <span class="spinner"></span>
-            <span style="font-size:0.82rem;color:var(--muted);">Waiting for GOG login… complete sign-in in the popup.</span>
-          </div>
-          <!-- Manual fallback, shown after timeout or on demand -->
-          <div class="code-instructions" id="gog-fallback" style="display:none;">
-            <div class="step">Paste the code from the popup's URL bar</div>
-            <p>After logging in, the popup URL will look like:<br>
-            <code style="font-size:0.75rem;color:var(--muted);">embed.gog.com/on_login_success?…<strong style="color:var(--accent2);">&amp;code=XXXXX</strong></code></p>
-            <p style="margin-top:4px;">Copy everything after <code style="color:var(--accent2)">code=</code> (or paste the full URL).</p>
-            <div class="row" style="gap:0.5rem;margin-top:6px;">
-              <input type="text" id="gog-code" placeholder="Paste code or full URL…">
-              <button style="background:var(--gog);color:#fff;white-space:nowrap;" onclick="submitGogCode()">Submit</button>
+          <!-- Shown immediately when popup opens -->
+          <div id="gog-waiting" style="display:none;margin-top:0.75rem;">
+            <div class="code-instructions">
+              <div class="step">1. Log in to GOG in the popup</div>
+              <div class="step" style="margin-top:6px;">2. When it redirects, the URL will contain <code style="color:var(--accent2)">code=XXXXX</code> — copy the full URL or just the code value and paste it below <strong style="color:var(--yellow);">immediately</strong> (it expires in ~30 seconds)</div>
+              <div class="row" style="gap:0.5rem;margin-top:8px;">
+                <input type="text" id="gog-code" placeholder="Paste code or full URL…">
+                <button style="background:var(--gog);color:#fff;white-space:nowrap;" onclick="submitGogCode()">Submit</button>
+              </div>
+              <div style="margin-top:6px;font-size:0.78rem;color:var(--muted);">
+                <span class="spinner" id="gog-spinner"></span>
+                <span id="gog-auto-status">Trying to capture automatically…</span>
+              </div>
             </div>
           </div>
           <div class="notice error" id="gog-error" style="margin-top:4px;"></div>
@@ -676,7 +674,6 @@ let allGames = [];         // full library from API
 let filteredGames = [];    // after search/filter
 let _gogPopup = null;
 let _gogPollTimer = null;
-let _gogFallbackTimer = null;
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 (async function init() {
@@ -864,17 +861,17 @@ function startGogAuth() {
 
   _gogPopup = window.open(GOG_AUTH_URL, 'gog-auth', 'width=820,height=660,left=100,top=80');
 
+  // Show the paste UI immediately — the auth code expires in ~30s so the user
+  // must be ready to paste the moment GOG redirects after login.
   document.getElementById('gog-waiting').style.display = 'block';
   document.getElementById('gog-connect-btn').disabled = true;
+  document.getElementById('gog-code').focus();
 
   // Strategy 1: postMessage from GOG's on_login_success page
   window.addEventListener('message', _gogMessageHandler);
 
   // Strategy 2: poll popup URL (works if it ever returns to same-origin; harmless otherwise)
   _gogPollTimer = setInterval(_gogPollPopup, 500);
-
-  // Strategy 3: fallback after 90s — show paste instructions
-  _gogFallbackTimer = setTimeout(_showGogFallback, 90000);
 }
 
 function _gogMessageHandler(event) {
@@ -892,9 +889,7 @@ function _gogMessageHandler(event) {
 
 function _gogPollPopup() {
   if (!_gogPopup || _gogPopup.closed) {
-    // User closed the popup without completing login
     _gogCleanup();
-    _showGogFallback();
     return;
   }
   try {
@@ -909,18 +904,10 @@ function _gogPollPopup() {
   } catch(e) { /* cross-origin — normal, keep polling */ }
 }
 
-function _showGogFallback() {
-  document.getElementById('gog-waiting').style.display = 'none';
-  document.getElementById('gog-fallback').style.display = 'block';
-  document.getElementById('gog-connect-btn').disabled = false;
-}
-
 function _gogCleanup() {
   window.removeEventListener('message', _gogMessageHandler);
   clearInterval(_gogPollTimer);
-  clearTimeout(_gogFallbackTimer);
   _gogPollTimer = null;
-  _gogFallbackTimer = null;
   if (_gogPopup && !_gogPopup.closed) _gogPopup.close();
   _gogPopup = null;
   document.getElementById('gog-waiting').style.display = 'none';
