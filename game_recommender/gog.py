@@ -150,6 +150,18 @@ def get_gog_library(access_token: str) -> list[Game]:
             if not title:
                 continue  # Skip blank or null titles
 
+            # Release year from unix timestamp (0 or missing → None)
+            rd_ts = product.get("releaseDate") or 0
+            try:
+                from datetime import datetime, timezone
+                release_year = datetime.fromtimestamp(rd_ts, tz=timezone.utc).year if rd_ts else None
+            except (OSError, OverflowError, ValueError):
+                release_year = None
+
+            # Community rating (0.0 or missing → None so we can distinguish "unrated" from 0)
+            raw_rating = product.get("rating")
+            gog_rating = float(raw_rating) if raw_rating else None
+
             games.append(Game(
                 name=title,
                 platform="gog",
@@ -158,6 +170,8 @@ def get_gog_library(access_token: str) -> list[Game]:
                 app_id=str(product.get("id", "")),
                 # playtime_minutes intentionally left at default 0 —
                 # GOG does not expose playtime through any web API
+                release_year=release_year,
+                gog_rating=gog_rating,
             ))
 
         # Check if we've processed the last page.

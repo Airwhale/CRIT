@@ -663,6 +663,11 @@ def _game_to_dict(game) -> dict:
     their "empty" values here; _enrich_with_rawg will overwrite them for
     games that have RAWG data.
     """
+    # "~" is a sentinel meaning "this platform does not provide this field at all".
+    # None means "the platform has this field type but no data for this specific game".
+    # The frontend renders "~" as – and None as ○.
+    steam = game.platform == "steam"
+    gog   = game.platform == "gog"
     return {
         "name":             _fix_mojibake(game.name),
         "platform":         game.platform,
@@ -672,6 +677,12 @@ def _game_to_dict(game) -> dict:
         "rawg_rating":      None,   # Populated by _enrich_with_rawg if called
         "metacritic":       None,   # Populated by _enrich_with_rawg if called
         "genres":           [],     # Populated by _enrich_with_rawg if called
+        "tags":             [],     # Populated by _enrich_with_rawg if called
+        # Steam library API has no release dates — use "~" so the UI shows –.
+        # RAWG enrichment will fill this in when it finds the game.
+        "release_year":     game.release_year if not steam else (game.release_year or "~"),
+        # GOG community rating: non-GOG platforms use "~" (not applicable).
+        "gog_rating":       game.gog_rating if gog else "~",
     }
 
 
@@ -694,10 +705,23 @@ def _enrich_with_rawg(games: list[dict], api_key: str) -> list[dict]:
         except Exception:
             return game  # Network/auth error for this title — skip rating, keep game
         if rating:
+            # Fill release_year from RAWG if the platform didn't supply one.
+            # "~" (Steam sentinel) and None (Epic/GOG with no native date) both
+            # get filled in from RAWG. If RAWG has no date either, "~" becomes
+            # None (RAWG knows the game but has no release date → ○, not –).
+            cur_year = game.get("release_year")
+            if rating.released and cur_year in (None, "~"):
+                new_year = int(rating.released[:4])
+            elif cur_year == "~" and not rating.released:
+                new_year = None  # RAWG found game but has no date → ○
+            else:
+                new_year = cur_year  # Keep platform-supplied year
             return {**game,
-                "rawg_rating": rating.rawg_rating,
-                "metacritic":  rating.metacritic_score,
-                "genres":      [_fix_mojibake(g) for g in rating.genres],
+                "rawg_rating":  rating.rawg_rating,
+                "metacritic":   rating.metacritic_score,
+                "genres":       [_fix_mojibake(g) for g in rating.genres],
+                "tags":         [_fix_mojibake(t) for t in (rating.tags or [])],
+                "release_year": new_year,
             }
         return game
 

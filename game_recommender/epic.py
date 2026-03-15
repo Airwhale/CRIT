@@ -195,6 +195,12 @@ def get_epic_library(access_token: str) -> list[Game]:
             continue
 
         seen.add(title)
+        # Extract release year from ISO date string (e.g. "2021-08-12T00:00:00.000Z")
+        raw_date = metadata.get("releaseDate") or ""
+        try:
+            release_year = int(raw_date[:4]) if len(raw_date) >= 4 and raw_date[:4].isdigit() else None
+        except (ValueError, TypeError):
+            release_year = None
         games.append(Game(
             name=title,
             platform="epic",
@@ -202,6 +208,7 @@ def get_epic_library(access_token: str) -> list[Game]:
             app_id=r.get("catalogId") or r.get("appName"),
             # playtime_minutes intentionally omitted (defaults to 0) because
             # Epic provides no playtime data through their public APIs
+            release_year=release_year,
         ))
 
     # Sort alphabetically so the output is deterministic and easy to scan

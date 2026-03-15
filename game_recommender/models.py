@@ -22,6 +22,8 @@ class Game:
     app_id: Optional[str] = None    # Platform-specific numeric/string identifier
     playtime_minutes: int = 0       # Total minutes played (0 = unplayed or unknown)
     last_played: Optional[str] = None  # Unix timestamp string from Steam; None for Epic/GOG
+    release_year: Optional[int] = None  # Release year from platform or RAWG; None if unavailable
+    gog_rating: Optional[float] = None  # GOG community rating (GOG only); None for other platforms
 
     @property
     def playtime_hours(self) -> float:
