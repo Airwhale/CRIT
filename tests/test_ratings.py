@@ -40,6 +40,7 @@ def clear_ratings_cache():
 def _rawg_resp(results: list) -> MagicMock:
     """Build a mock RAWG API response with the given results list."""
     resp = MagicMock()
+    resp.status_code = 200
     resp.raise_for_status.return_value = None
     resp.json.return_value = {"results": results}
     return resp
@@ -150,6 +151,7 @@ class TestGetGameRatingFailure:
     def test_http_error_propagates(self):
         """A 429 (rate limited) response should propagate as HTTPError."""
         resp = MagicMock()
+        resp.status_code = 429
         resp.raise_for_status.side_effect = req_lib.HTTPError("429")
         with patch("game_recommender.ratings.requests.get", return_value=resp):
             with pytest.raises(req_lib.HTTPError):

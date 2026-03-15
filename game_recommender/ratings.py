@@ -16,6 +16,7 @@ Rate limiting: RAWG asks that clients be "polite." We enforce a default
 import os
 import time
 import requests
+from requests.exceptions import HTTPError
 from typing import Optional
 from .models import GameRating
 
@@ -79,12 +80,25 @@ def get_game_rating(
 
     # page_size=1 returns only the best-matching result — no need to evaluate
     # multiple candidates since we always pick the first one.
-    response = requests.get(
-        f"{RAWG_API_BASE}/games",
-        params={"key": api_key, "search": game_name, "page_size": 1},
-        timeout=10,
-    )
-    response.raise_for_status()
+    # Retry up to 2 times on transient 5xx errors before giving up.
+    for attempt in range(3):
+        response = requests.get(
+            f"{RAWG_API_BASE}/games",
+            params={"key": api_key, "search": game_name, "page_size": 1},
+            timeout=10,
+        )
+        if response.status_code < 500:
+            break
+        if attempt < 2:
+            time.sleep(2 ** attempt)  # 1s, then 2s before the third try
+    try:
+        response.raise_for_status()
+    except HTTPError as e:
+        if response.status_code >= 500:
+            # RAWG server error — treat as no rating rather than aborting the batch
+            _SEARCH_CACHE[cache_key] = None
+            return None
+        raise  # Re-raise 4xx errors (bad key, rate limit) so the caller sees them
 
     results = response.json().get("results", [])
     if not results:

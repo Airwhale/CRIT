@@ -686,7 +686,10 @@ def _enrich_with_rawg(games: list[dict], api_key: str) -> list[dict]:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def fetch_one(game: dict) -> dict:
-        rating = get_game_rating(game["name"], api_key=api_key)
+        try:
+            rating = get_game_rating(game["name"], api_key=api_key)
+        except Exception:
+            return game  # Network/auth error for this title — skip rating, keep game
         if rating:
             return {**game,
                 "rawg_rating": rating.rawg_rating,
