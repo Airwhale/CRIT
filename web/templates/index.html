@@ -431,6 +431,25 @@
   .mode-opts .opt-val { color: var(--accent2); font-weight: 700; min-width: 36px; display: inline-block; }
   .mode-opts input[type=checkbox] { accent-color: var(--accent); width: auto; }
 
+  /* ITAD price card for unowned recommended games */
+  #rec-itad-card { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  #rec-itad-card .itad-card-title {
+    font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.55rem;
+  }
+  #rec-itad-card .itad-row {
+    display: flex; align-items: baseline; gap: 0.6rem;
+    padding: 0.3rem 0; border-bottom: 1px solid var(--bg3); font-size: 0.85rem;
+  }
+  #rec-itad-card .itad-row:last-child { border-bottom: none; }
+  #rec-itad-card .itad-name  { flex: 1; font-weight: 600; }
+  #rec-itad-card .itad-low   { color: var(--green); font-weight: 600; }
+  #rec-itad-card .itad-meta  { color: var(--muted); font-size: 0.78rem; }
+  #rec-itad-card .itad-link  { color: var(--accent2); font-size: 0.78rem; text-decoration: none; margin-left: auto; white-space: nowrap; }
+  #rec-itad-card .itad-link:hover { text-decoration: underline; }
+  #rec-itad-card .itad-no-key { font-size: 0.83rem; color: var(--muted); }
+  #rec-itad-card .itad-no-key a { color: var(--accent2); }
+
   /* status line inside rec-output */
   .rec-status {
     color: var(--muted);
@@ -901,6 +920,7 @@
       <div id="rec-status-line" class="rec-status" hidden></div>
       <div id="deals-table-wrap" hidden></div>
       <div id="rec-content"></div>
+      <div id="rec-itad-card" hidden></div>
       <span class="streaming-cursor" id="rec-cursor" hidden></span>
     </div>
   </div><!-- step 3 card -->
@@ -1781,6 +1801,9 @@ function getRecommendations() {
   content.innerHTML = '';
   dealsWrap.innerHTML = '';
   dealsWrap.hidden = true;
+  const itadCard = document.getElementById('rec-itad-card');
+  itadCard.hidden = true;
+  itadCard.innerHTML = '';
   dealsData = [];
   dealsSortCol = null;
   dealsSortAsc = true;
@@ -1816,6 +1839,7 @@ function getRecommendations() {
       btn.innerHTML = '✨ Recommend';
       content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
       linkifyGameNames();
+      _fetchItadForRec();
       // Save to recommendation history
       if (rawText) {
         const prefsText = document.getElementById('preferences').value.trim();
@@ -1959,6 +1983,72 @@ function linkifyGameNames() {
     a.appendChild(el.cloneNode(true));
     el.replaceWith(a);
   });
+}
+
+// Fetch ITAD historical low prices for games Claude recommended that the user doesn't own.
+async function _fetchItadForRec() {
+  const card = document.getElementById('rec-itad-card');
+  if (!card) return;
+
+  // Collect bolded game names that are NOT in the user's library.
+  const ownedKeys = new Set(allGames.map(g => g.name.toLowerCase()));
+  const unowned = [];
+  document.querySelectorAll('#rec-content strong').forEach(el => {
+    const name = el.textContent.trim();
+    if (name && !ownedKeys.has(name.toLowerCase())) unowned.push(name);
+  });
+  // Also include names wrapped in <a> (already linkified).
+  document.querySelectorAll('#rec-content a strong').forEach(el => {
+    const name = el.textContent.trim();
+    if (name && !ownedKeys.has(name.toLowerCase())) {
+      if (!unowned.some(n => n.toLowerCase() === name.toLowerCase())) unowned.push(name);
+    }
+  });
+
+  if (!unowned.length) return;
+
+  card.hidden = false;
+  card.innerHTML = '<div class="itad-card-title">Price History (unowned games)</div><div class="itad-loading"><span class="spinner"></span></div>';
+
+  let resp;
+  try {
+    resp = await fetch('/api/itad/games', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({names: unowned}),
+    });
+    resp = await resp.json();
+  } catch {
+    card.innerHTML = '<div class="itad-card-title">Price History (unowned games)</div><div class="itad-no-key">Could not load price data.</div>';
+    return;
+  }
+
+  if (!resp.available) {
+    card.innerHTML = `<div class="itad-card-title">Price History (unowned games)</div>` +
+      `<div class="itad-no-key">No ITAD data — add an <code>ITAD_API_KEY</code> to your <code>.env</code> file ` +
+      `(free key at <a href="https://isthereanydeal.com/dev/app/" target="_blank" rel="noopener">isthereanydeal.com/dev/app</a>) ` +
+      `to see historical low prices for recommended games.</div>`;
+    return;
+  }
+
+  const data = resp.data || {};
+  const rows = unowned.map(name => {
+    const d = data[name];
+    if (!d) return `<div class="itad-row"><span class="itad-name">${escHtml(name)}</span><span class="itad-meta">No data</span></div>`;
+    const low = d.hist_low != null ? `$${d.hist_low.toFixed(2)}` : '—';
+    const store = d.hist_low_store ? ` on ${escHtml(d.hist_low_store)}` : '';
+    const date  = d.hist_low_date  ? ` (${escHtml(d.hist_low_date)})` : '';
+    const link  = d.slug
+      ? `<a class="itad-link" href="https://isthereanydeal.com/game/${encodeURIComponent(d.slug)}/info/" target="_blank" rel="noopener">ITAD ↗</a>`
+      : '';
+    return `<div class="itad-row">` +
+      `<span class="itad-name">${escHtml(name)}</span>` +
+      `<span class="itad-low">${low}</span>` +
+      `<span class="itad-meta">hist. low${store}${date}</span>` +
+      `${link}</div>`;
+  }).join('');
+
+  card.innerHTML = `<div class="itad-card-title">Price History (unowned games)</div>${rows}`;
 }
 
 // Map of lowercased game name → direct deal URL for the most recent sales recommendation.

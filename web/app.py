@@ -1264,6 +1264,71 @@ async def itad_history(game_id: str):
     return {"history": data}
 
 
+@app.post("/api/itad/games")
+async def itad_games(request: Request):
+    """Look up ITAD historical low data for a list of game names.
+
+    Used by the recommendation UI to show pricing for games the user doesn't own.
+    Returns {"available": false} when ITAD_API_KEY is not configured so the
+    frontend can show a "set up your key" prompt instead of silently doing nothing.
+
+    Request body:  {"names": ["Game A", "Game B", ...]}
+    Response:      {"available": true,  "data": {"Game A": {...}, ...}}
+               or  {"available": false}
+    """
+    itad_key = os.environ.get("ITAD_API_KEY")
+    if not itad_key:
+        return {"available": False}
+
+    body = await request.json()
+    names = [n for n in body.get("names", []) if n and isinstance(n, str)]
+    if not names:
+        return {"available": True, "data": {}}
+
+    from game_recommender.itad import batch_lookup_game_ids, get_overview
+    from datetime import datetime
+
+    game_infos = [(name, None) for name in names]
+    id_map = await asyncio.to_thread(batch_lookup_game_ids, game_infos, itad_key)
+
+    name_to_id = {name: gid for name, gid in id_map.items() if gid}
+    if not name_to_id:
+        return {"available": True, "data": {}}
+
+    overview = await asyncio.to_thread(get_overview, list(name_to_id.values()), itad_key)
+    if not overview:
+        return {"available": True, "data": {}}
+
+    id_to_name = {v: k for k, v in name_to_id.items()}
+    result: dict = {}
+    for gid, item in overview.items():
+        name = id_to_name.get(gid)
+        if not name:
+            continue
+        lowest   = item.get("lowest") or {}
+        slug     = item.get("slug", "")
+        if not lowest:
+            result[name] = {"slug": slug}
+            continue
+        hist_price = (lowest.get("price") or {}).get("amount")
+        hist_store = (lowest.get("shop")  or {}).get("name", "")
+        hist_ts    = lowest.get("timestamp")
+        hist_date  = None
+        if hist_ts:
+            try:
+                hist_date = datetime.fromtimestamp(hist_ts).strftime("%b %Y")
+            except Exception:
+                pass
+        result[name] = {
+            "hist_low":       hist_price,
+            "hist_low_store": hist_store,
+            "hist_low_date":  hist_date,
+            "slug":           slug,
+        }
+
+    return {"available": True, "data": result}
+
+
 @app.post("/api/itad/overview")
 async def itad_overview(request: Request):
     """Get current best price + historical low for a batch of games.
