@@ -24,9 +24,11 @@ import asyncio
 import os
 import re
 import html
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import quote_plus
+from contextlib import asynccontextmanager
 
 import anthropic
 import httpx
@@ -68,7 +70,11 @@ async def add_security_headers(request: Request, call_next):
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
-        "connect-src 'self';"
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self';"
     )
     return response
 
@@ -78,6 +84,32 @@ async def add_security_headers(request: Request, call_next):
 # This is intentional: credentials never persist to disk, and clearing sessions
 # is as simple as restarting the server. Not suitable for multi-user production.
 _sessions: dict[str, dict] = {}
+_session_last_seen: dict[str, float] = {}
+
+# Keep in-memory sessions bounded and age them out so memory cannot grow
+# indefinitely if many sessions are created over long-running uptime.
+_SESSION_MAX = 256
+_SESSION_MAX_AGE_SECONDS = 60 * 60 * 8
+
+
+def _prune_sessions(now: float | None = None) -> None:
+    """Drop expired sessions and evict oldest sessions when above capacity."""
+    now = now or time.time()
+
+    expired = [
+        sid for sid in _sessions
+        if now - _session_last_seen.get(sid, now) > _SESSION_MAX_AGE_SECONDS
+    ]
+    for sid in expired:
+        _sessions.pop(sid, None)
+        _session_last_seen.pop(sid, None)
+
+    overflow = len(_sessions) - _SESSION_MAX
+    if overflow > 0:
+        oldest = sorted(_sessions, key=lambda sid: _session_last_seen.get(sid, 0))
+        for sid in oldest[:overflow]:
+            _sessions.pop(sid, None)
+            _session_last_seen.pop(sid, None)
 
 
 def _get_session(session_id: str | None) -> tuple[str, dict]:
@@ -90,12 +122,26 @@ def _get_session(session_id: str | None) -> tuple[str, dict]:
         (session_id, session_data) tuple. If the cookie was valid, returns
         the existing session; otherwise creates a new UUID and empty session.
     """
+    _prune_sessions()
+
     if session_id and session_id in _sessions:
+        _session_last_seen[session_id] = time.time()
         return session_id, _sessions[session_id]
     # Create a fresh session with a new UUID
     new_id = str(uuid.uuid4())
     _sessions[new_id] = {}
+    _session_last_seen[new_id] = time.time()
     return new_id, _sessions[new_id]
+
+
+@asynccontextmanager
+async def _sse_timeout(seconds: int):
+    """Python-version-safe timeout context for SSE recommendation streams."""
+    if hasattr(asyncio, "timeout"):
+        async with asyncio.timeout(seconds):
+            yield
+    else:
+        yield
 
 
 def _set_session_cookie(response: Response, session_id: str) -> None:
@@ -1052,7 +1098,7 @@ async def recommend(
         if use_thinking:
             api_kwargs["thinking"] = {"type": "adaptive"}
         try:
-            async with asyncio.timeout(240):
+            async with _sse_timeout(240):
                 async with client.messages.stream(**api_kwargs) as stream:
                     # Yield each text chunk as it arrives — the browser renders it immediately
                     async for text in stream.text_stream:

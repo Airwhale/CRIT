@@ -111,7 +111,7 @@ Choose the block for your OS, paste it all at once, then edit `.env` before the 
 ### Linux / macOS
 
 ```bash
-git clone https://github.com/Airwhale/claude/blob/claude/game-recommendation-system-FAohj
+git clone <repo-url>
 cd claude
 python3 -m venv .venv
 source .venv/bin/activate
@@ -194,6 +194,7 @@ Choose a mode with the tab switcher:
 | **From Library** | Picks games you own that suit your taste |
 | **Steam Deals** | Scans current sales and your wishlist for good buys |
 | **Backlog** | Picks unplayed games you already own to try next |
+| **Discover** | Suggests new games you don't own yet based on your taste profile |
 
 **Optional:** type a mood or preference in the text box (e.g. *"something short I can finish this weekend"* or *"a relaxing game with no time pressure"*).
 

@@ -28,7 +28,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-from web.app import app, _sessions
+from web.app import app, _sessions, _session_last_seen
 from tests.conftest import make_claude_client, FAKE_GAMES, parse_sse
 
 
@@ -43,8 +43,10 @@ def clear_sessions():
     of in-memory session state.
     """
     _sessions.clear()
+    _session_last_seen.clear()
     yield
     _sessions.clear()
+    _session_last_seen.clear()
 
 
 @pytest.fixture
@@ -95,8 +97,13 @@ def steam_session(client):
         yield client, session_id
 
 
+def _set_session_cookie(client, session_id: str) -> None:
+    """Set the session cookie on the TestClient for subsequent requests."""
+    client.cookies.set("session_id", session_id)
+
+
 def _cookies(session_id: str) -> dict:
-    """Build a minimal cookies dict for authenticating test requests."""
+    """Backward-compatible cookie helper for tests not yet migrated."""
     return {"session_id": session_id}
 
 
@@ -394,10 +401,8 @@ class TestRecommend:
         with patch("web.app._fetch_steam", return_value=games), \
              patch("web.app.anthropic.AsyncAnthropic",
                    return_value=make_claude_client(chunks)):
-            resp = client.get(
-                f"/api/recommend?{query_str}",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get(f"/api/recommend?{query_str}")
         return resp
 
     # ── Success paths ──────────────────────────────────────────────────────
@@ -468,10 +473,8 @@ class TestRecommend:
              patch("web.app._fetch_sales", return_value=(fake_sales, [])), \
              patch("web.app.anthropic.AsyncAnthropic",
                    return_value=make_claude_client(["Cyberpunk 2077 is a great deal!"])):
-            resp = client.get(
-                "/api/recommend?mode=sales&min_discount=50&include_wishlist=false",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get("/api/recommend?mode=sales&min_discount=50&include_wishlist=false")
 
         assert resp.status_code == 200
         events = parse_sse(resp.text)
@@ -524,9 +527,9 @@ class TestRecommend:
         _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
 
         long_pref = "x" * 501
+        _set_session_cookie(client, session_id)
         resp = client.get(
             f"/api/recommend?preferences={long_pref}",
-            cookies=_cookies(session_id),
         )
         assert resp.status_code == 400
 
@@ -581,10 +584,8 @@ class TestRecommend:
 
         # All FAKE_GAMES have playtime > 0 except Disco Elysium; use max_new_minutes=0
         with patch("web.app._fetch_steam", return_value=FAKE_GAMES):
-            resp = client.get(
-                "/api/recommend?mode=new&max_new_minutes=0",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get("/api/recommend?mode=new&max_new_minutes=0")
 
         assert resp.status_code == 200
         events = parse_sse(resp.text)
@@ -597,10 +598,8 @@ class TestRecommend:
 
         with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
              patch("web.app._fetch_sales", return_value=[]):
-            resp = client.get(
-                "/api/recommend?mode=sales",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get("/api/recommend?mode=sales")
 
         assert resp.status_code == 200
         events = parse_sse(resp.text)
