@@ -28,7 +28,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-from web.app import app, _sessions
+from web.app import app, _sessions, _session_last_seen
 from tests.conftest import make_claude_client, FAKE_GAMES, parse_sse
 
 
@@ -43,8 +43,10 @@ def clear_sessions():
     of in-memory session state.
     """
     _sessions.clear()
+    _session_last_seen.clear()
     yield
     _sessions.clear()
+    _session_last_seen.clear()
 
 
 @pytest.fixture
@@ -95,8 +97,13 @@ def steam_session(client):
         yield client, session_id
 
 
+def _set_session_cookie(client, session_id: str) -> None:
+    """Set the session cookie on the TestClient for subsequent requests."""
+    client.cookies.set("session_id", session_id)
+
+
 def _cookies(session_id: str) -> dict:
-    """Build a minimal cookies dict for authenticating test requests."""
+    """Backward-compatible cookie helper for tests not yet migrated."""
     return {"session_id": session_id}
 
 
@@ -394,10 +401,8 @@ class TestRecommend:
         with patch("web.app._fetch_steam", return_value=games), \
              patch("web.app.anthropic.AsyncAnthropic",
                    return_value=make_claude_client(chunks)):
-            resp = client.get(
-                f"/api/recommend?{query_str}",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get(f"/api/recommend?{query_str}")
         return resp
 
     # ── Success paths ──────────────────────────────────────────────────────
@@ -468,10 +473,8 @@ class TestRecommend:
              patch("web.app._fetch_sales", return_value=(fake_sales, [])), \
              patch("web.app.anthropic.AsyncAnthropic",
                    return_value=make_claude_client(["Cyberpunk 2077 is a great deal!"])):
-            resp = client.get(
-                "/api/recommend?mode=sales&min_discount=50&include_wishlist=false",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get("/api/recommend?mode=sales&min_discount=50&include_wishlist=false")
 
         assert resp.status_code == 200
         events = parse_sse(resp.text)
@@ -524,9 +527,9 @@ class TestRecommend:
         _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
 
         long_pref = "x" * 501
+        _set_session_cookie(client, session_id)
         resp = client.get(
             f"/api/recommend?preferences={long_pref}",
-            cookies=_cookies(session_id),
         )
         assert resp.status_code == 400
 
@@ -548,6 +551,8 @@ class TestRecommend:
         assert resp.status_code == 200   # SSE response opens fine
         events = parse_sse(resp.text)
         assert any("error" in e for e in events)
+
+
 
     def test_claude_exception_streams_error_event(self, client):
         """An exception from the Claude stream is caught and emitted as an error event."""
@@ -581,10 +586,8 @@ class TestRecommend:
 
         # All FAKE_GAMES have playtime > 0 except Disco Elysium; use max_new_minutes=0
         with patch("web.app._fetch_steam", return_value=FAKE_GAMES):
-            resp = client.get(
-                "/api/recommend?mode=new&max_new_minutes=0",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get("/api/recommend?mode=new&max_new_minutes=0")
 
         assert resp.status_code == 200
         events = parse_sse(resp.text)
@@ -597,10 +600,8 @@ class TestRecommend:
 
         with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
              patch("web.app._fetch_sales", return_value=[]):
-            resp = client.get(
-                "/api/recommend?mode=sales",
-                cookies=_cookies(session_id),
-            )
+            _set_session_cookie(client, session_id)
+            resp = client.get("/api/recommend?mode=sales")
 
         assert resp.status_code == 200
         events = parse_sse(resp.text)
@@ -619,6 +620,52 @@ class TestRecommend:
         events = parse_sse(resp.text)
         # Should succeed (clamped, not rejected)
         assert any(e.get("done") is True for e in events)
+
+class TestDealsEndpoint:
+    """Tests for GET /api/deals standalone deals-table endpoint."""
+
+    def test_requires_connected_session(self, client):
+        resp = client.get('/api/deals')
+        assert resp.status_code == 400
+
+    def test_returns_deals_and_warnings(self, client, monkeypatch):
+        from game_recommender.steam_sales import SaleGame
+
+        session_id = 'sess-deals-json'
+        _sessions[session_id] = {'steam': {'api_key': 'k', 'user_id': 'u'}}
+        monkeypatch.setenv('ITAD_API_KEY', 'itad-test-key')
+
+        sales = [
+            SaleGame(name='Cyberpunk 2077', app_id='1091500', discount_percent=60,
+                     original_price_cents=5999, sale_price_cents=2399),
+        ]
+        with patch('web.app._fetch_steam', return_value=FAKE_GAMES), \
+             patch('web.app._fetch_sales', return_value=(sales, ['wishlist source unavailable'])), \
+             patch('web.app._enrich_deals_with_itad', return_value={'Cyberpunk 2077': {'verdict': 'near_low', 'hist_low': 19.99}}):
+            _set_session_cookie(client, session_id)
+            resp = client.get('/api/deals?min_discount=40&deal_sources=steam_featured')
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data['deals']) == 1
+        assert data['warnings'] == ['wishlist source unavailable']
+        assert 'Cyberpunk 2077' in data['itad_data']
+
+    def test_without_itad_key_skips_itad_enrichment(self, client, monkeypatch):
+        session_id = 'sess-deals-no-itad'
+        _sessions[session_id] = {'steam': {'api_key': 'k', 'user_id': 'u'}}
+        monkeypatch.delenv('ITAD_API_KEY', raising=False)
+
+        with patch('web.app._fetch_steam', return_value=FAKE_GAMES), \
+             patch('web.app._fetch_sales', return_value=([], [])), \
+             patch('web.app._enrich_deals_with_itad') as mock_itad:
+            _set_session_cookie(client, session_id)
+            resp = client.get('/api/deals')
+
+        assert resp.status_code == 200
+        assert resp.json()['itad_data'] == {}
+        mock_itad.assert_not_called()
+
 
 
 # ── Corner cases ──────────────────────────────────────────────────────────────
