@@ -784,6 +784,9 @@ async def recommend(
     deal_sources: str = "",         # Comma-separated source keys; empty = all
     # Backlog mode options
     max_new_minutes: int = 60,      # Games with <= this many minutes are "unplayed"
+    # Model options
+    model: str = "claude-sonnet-4-6",
+    use_thinking: bool = False,
     session_id: str | None = Cookie(default=None),
 ):
     """Stream game recommendations from Claude via Server-Sent Events.
@@ -865,7 +868,7 @@ async def recommend(
                 yield status("Fetching deals…")
 
             try:
-                sale_games = await asyncio.to_thread(
+                sale_games, sale_warnings = await asyncio.to_thread(
                     _fetch_sales,
                     min_discount,
                     steam_creds,
@@ -875,6 +878,10 @@ async def recommend(
             except Exception as e:
                 yield f'data: {json.dumps({"error": f"Sales fetch failed: {e}"})}\n\n'
                 return
+
+            # Surface warnings for any deal sources that failed
+            if sale_warnings:
+                yield f'data: {json.dumps({"warnings": sale_warnings})}\n\n'
 
             if not sale_games:
                 yield f'data: {json.dumps({"error": "No sales found above the discount threshold. Try lowering it."})}\n\n'
@@ -917,20 +924,26 @@ async def recommend(
 
         # Use AsyncAnthropic so the streaming doesn't block the event loop
         client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+        api_kwargs = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if use_thinking:
+            api_kwargs["thinking"] = {"type": "adaptive"}
         try:
-            async with client.messages.stream(
-                model="claude-opus-4-6",
-                max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}],
-            ) as stream:
-                # Yield each text chunk as it arrives — the browser renders it immediately
-                async for text in stream.text_stream:
-                    # json.dumps handles quoting, escaping newlines, etc.
-                    yield f'data: {json.dumps({"text": text})}\n\n'
+            async with asyncio.timeout(240):
+                async with client.messages.stream(**api_kwargs) as stream:
+                    # Yield each text chunk as it arrives — the browser renders it immediately
+                    async for text in stream.text_stream:
+                        # json.dumps handles quoting, escaping newlines, etc.
+                        yield f'data: {json.dumps({"text": text})}\n\n'
 
             # Signal that the stream is complete so the frontend can hide the spinner
             yield 'data: {"done": true}\n\n'
 
+        except TimeoutError:
+            yield f'data: {json.dumps({"error": "Claude response timed out after 4 minutes."})}\n\n'
         except Exception as e:
             # Yield the error as an SSE event rather than crashing the stream
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
@@ -952,16 +965,129 @@ def _fetch_sales(
     steam_creds: dict,
     sources: set[str],
     owned_ids: set[str],
-) -> list:
-    """Wrapper around get_all_sales, extracting credentials from the session dict."""
+) -> tuple[list, list[str]]:
+    """Wrapper around get_all_sales, extracting credentials from the session dict.
+
+    Returns (sale_games, warnings) where warnings lists any sources that failed.
+    """
     from game_recommender.steam_sales import get_all_sales
-    return get_all_sales(
+    warnings: list[str] = []
+    games = get_all_sales(
         min_discount=min_discount,
         steam_api_key=steam_creds.get("api_key"),
         steam_user_id=steam_creds.get("user_id"),
         sources=sources,
         owned_app_ids=owned_ids,
+        error_callback=lambda source, err: warnings.append(f"{source}: {err}"),
     )
+    return games, warnings
+
+
+# ── ITAD (IsThereAnyDeal) endpoints ──────────────────────────────────────────
+
+@app.get("/api/itad/lookup")
+async def itad_lookup(title: str, app_id: str | None = None):
+    """Look up a game's ITAD UUID by title or Steam app ID."""
+    from game_recommender.itad import lookup_game_id
+    game_id = await asyncio.to_thread(lookup_game_id, title, app_id)
+    if not game_id:
+        return {"found": False}
+    return {"found": True, "id": game_id}
+
+
+@app.get("/api/itad/history")
+async def itad_history(game_id: str):
+    """Get full price history for a single game (for chart rendering)."""
+    from game_recommender.itad import get_price_history
+    data = await asyncio.to_thread(get_price_history, game_id)
+    return {"history": data}
+
+
+@app.post("/api/itad/overview")
+async def itad_overview(request: Request):
+    """Get current best price + historical low for a batch of games.
+
+    Request body: {"game_ids": ["uuid1", "uuid2", ...]}
+    """
+    from game_recommender.itad import get_overview
+    body = await request.json()
+    game_ids = body.get("game_ids", [])
+    if not game_ids:
+        return {"prices": {}}
+    data = await asyncio.to_thread(get_overview, game_ids)
+    return {"prices": data}
+
+
+# ── Library disk cache ───────────────────────────────────────────────────────
+
+_LIBRARY_CACHE_DIR = Path(os.environ.get("CRIT_CACHE_DIR", Path.home() / ".cache" / "crit"))
+_LIBRARY_CACHE_FILE = _LIBRARY_CACHE_DIR / "library_cache.json"
+
+
+@app.post("/api/library/save")
+async def save_library_cache(request: Request):
+    """Save the enriched library to disk for instant reload across restarts."""
+    body = await request.json()
+    games = body.get("games", [])
+    try:
+        _LIBRARY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _LIBRARY_CACHE_FILE.write_text(json.dumps(games), encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save library cache: {e}")
+    return {"ok": True, "count": len(games)}
+
+
+@app.get("/api/library/cached")
+async def get_library_cache():
+    """Load the cached library from disk (if it exists)."""
+    if not _LIBRARY_CACHE_FILE.exists():
+        return {"games": None}
+    try:
+        games = json.loads(_LIBRARY_CACHE_FILE.read_text(encoding="utf-8"))
+        return {"games": games}
+    except Exception:
+        return {"games": None}
+
+
+# ── Recommendation history ───────────────────────────────────────────────────
+
+_HISTORY_FILE = _LIBRARY_CACHE_DIR / "rec_history.json"
+
+
+@app.post("/api/recommendations/save")
+async def save_recommendation(request: Request):
+    """Save a recommendation session to the history file."""
+    body = await request.json()
+    entry = {
+        "mode": body.get("mode", "library"),
+        "preferences": body.get("preferences", ""),
+        "output": body.get("output", ""),
+        "timestamp": body.get("timestamp"),
+    }
+    try:
+        _LIBRARY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        history = []
+        if _HISTORY_FILE.exists():
+            history = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+        history.append(entry)
+        # Keep last 50 recommendations
+        history = history[-50:]
+        _HISTORY_FILE.write_text(json.dumps(history, indent=1), encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save recommendation: {e}")
+    return {"ok": True}
+
+
+@app.get("/api/recommendations/history")
+async def get_recommendation_history():
+    """Load recommendation history from disk."""
+    if not _HISTORY_FILE.exists():
+        return {"history": []}
+    try:
+        history = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+        return {"history": history}
+    except Exception:
+        return {"history": []}
 
 
 # ── Prompt builders ───────────────────────────────────────────────────────────

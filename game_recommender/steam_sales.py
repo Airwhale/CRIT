@@ -238,6 +238,7 @@ def get_all_sales(
     sources: Optional[set[str]] = None,
     owned_app_ids: Optional[set[str]] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
+    error_callback: Optional[Callable[[str, str], None]] = None,
 ) -> list[SaleGame]:
     """Fetch and merge game deals from all requested sources.
 
@@ -275,8 +276,9 @@ def get_all_sales(
                 g for g in get_wishlist_on_sale(steam_api_key, steam_user_id, min_discount)
                 if g.app_id not in owned
             ]
-        except Exception:
-            pass
+        except Exception as e:
+            if error_callback:
+                error_callback("Steam Wishlist", str(e))
 
     # ── Steam featured specials ───────────────────────────────────────────────
     if "steam_featured" in sources:
@@ -284,8 +286,9 @@ def get_all_sales(
             progress_callback("Fetching Steam featured deals…")
         try:
             all_games += [g for g in get_featured_specials(min_discount) if g.app_id not in owned]
-        except Exception:
-            pass
+        except Exception as e:
+            if error_callback:
+                error_callback("Steam Featured", str(e))
 
     # ── GOG (direct catalog API — full list, not CheapShark subset) ──────────
     if "gog" in sources:
@@ -293,8 +296,9 @@ def get_all_sales(
             progress_callback("Fetching GOG deals…")
         try:
             all_games += get_gog_catalog_deals(min_discount)
-        except Exception:
-            pass
+        except Exception as e:
+            if error_callback:
+                error_callback("GOG", str(e))
 
     # ── CheapShark stores (Humble, Fanatical, GMG, Epic deals) ───────────────
     _cs_map = {"humble": "11", "fanatical": "13", "gmg": "35", "epic_deals": "25"}
@@ -304,8 +308,9 @@ def get_all_sales(
             progress_callback("Fetching deals from other stores…")
         try:
             all_games += get_cheapshark_deals(cs_store_ids, min_discount)
-        except Exception:
-            pass
+        except Exception as e:
+            if error_callback:
+                error_callback("CheapShark", str(e))
 
     # ── Epic free games ───────────────────────────────────────────────────────
     if "epic_free" in sources:
@@ -313,8 +318,9 @@ def get_all_sales(
             progress_callback("Fetching Epic free games…")
         try:
             all_games += get_epic_free_games()
-        except Exception:
-            pass
+        except Exception as e:
+            if error_callback:
+                error_callback("Epic Free Games", str(e))
 
     # Deduplicate by (store, app_id) — first occurrence wins
     seen: set[tuple[str, str]] = set()

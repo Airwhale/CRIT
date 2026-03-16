@@ -11,12 +11,18 @@ personal use.
 
 Rate limiting: RAWG asks that clients be "polite." We enforce a default
 0.25-second delay between requests. Tests pass delay=0 to keep the suite fast.
+
+Persistent cache: results are written to a JSON file (~/.cache/crit/rawg_cache.json)
+so lookups survive server restarts. The in-memory dict is loaded from disk on
+first access and flushed after each new lookup.
 """
 
+import json
 import os
 import re
 import time
 import requests
+from pathlib import Path
 from requests.exceptions import HTTPError
 from typing import Optional
 from .models import GameRating
@@ -25,6 +31,10 @@ from .models import GameRating
 RAWG_API_BASE = "https://api.rawg.io/api"
 
 _STOP_WORDS = {"the", "a", "an", "of", "in", "on", "at", "to", "and", "or", "is", "its", "for"}
+
+# Persistent cache location — ~/.cache/crit/rawg_cache.json
+_CACHE_DIR = Path(os.environ.get("CRIT_CACHE_DIR", Path.home() / ".cache" / "crit"))
+_CACHE_FILE = _CACHE_DIR / "rawg_cache.json"
 
 
 def _names_match(query: str, result: str) -> bool:
@@ -51,10 +61,52 @@ def _names_match(query: str, result: str) -> bool:
     return any(tok in r_norm for tok in q_tokens)
 
 # Module-level cache: maps lowercase game name → GameRating (or None if not found).
-# Persists for the lifetime of the process, so repeated calls within a session
-# (e.g. library reload, then recommendations) skip redundant HTTP round-trips.
+# Loaded from disk on first access, written back after each new HTTP lookup.
 # Tests clear this between each test case using the clear_ratings_cache fixture.
 _SEARCH_CACHE: dict[str, Optional[GameRating]] = {}
+_cache_loaded = False
+
+
+def _load_disk_cache() -> None:
+    """Load the persistent cache from disk into _SEARCH_CACHE (once per process)."""
+    global _cache_loaded
+    if _cache_loaded:
+        return
+    _cache_loaded = True
+    try:
+        if _CACHE_FILE.exists():
+            raw = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+            for key, val in raw.items():
+                if val is None:
+                    _SEARCH_CACHE[key] = None
+                else:
+                    _SEARCH_CACHE[key] = GameRating(**val)
+    except Exception:
+        pass  # Corrupt cache is fine — we'll just re-fetch
+
+
+def _save_disk_cache() -> None:
+    """Flush the in-memory cache to disk."""
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        serialised = {}
+        for key, val in _SEARCH_CACHE.items():
+            if val is None:
+                serialised[key] = None
+            else:
+                serialised[key] = {
+                    "name": val.name,
+                    "rawg_rating": val.rawg_rating,
+                    "rawg_ratings_count": val.rawg_ratings_count,
+                    "metacritic_score": val.metacritic_score,
+                    "genres": val.genres,
+                    "tags": val.tags,
+                    "released": val.released,
+                    "background_image": val.background_image,
+                }
+        _CACHE_FILE.write_text(json.dumps(serialised, indent=1), encoding="utf-8")
+    except Exception:
+        pass  # Non-fatal — cache is a performance optimisation, not critical
 
 
 def get_game_rating(
@@ -88,6 +140,9 @@ def get_game_rating(
         requests.HTTPError: On non-2xx responses (e.g. 429 rate-limited).
         requests.ConnectionError / requests.Timeout: On network failure.
     """
+    # Load persistent cache from disk on first call
+    _load_disk_cache()
+
     # Check cache first — avoids both the delay and the HTTP call
     cache_key = game_name.lower()
     if cache_key in _SEARCH_CACHE:
@@ -131,6 +186,7 @@ def get_game_rating(
             if response.status_code >= 500:
                 # RAWG server error — treat as no rating rather than aborting the batch
                 _SEARCH_CACHE[cache_key] = None
+                _save_disk_cache()
                 return None
             raise  # Re-raise 4xx errors (bad key, rate limit) so the caller sees them
 
@@ -140,6 +196,7 @@ def get_game_rating(
     if not results:
         # Cache the miss so we don't query the same unknown title again
         _SEARCH_CACHE[cache_key] = None
+        _save_disk_cache()
         return None
 
     r = results[0]
@@ -152,6 +209,7 @@ def get_game_rating(
     result_name = r.get("name") or game_name
     if not _names_match(game_name, result_name):
         _SEARCH_CACHE[cache_key] = None
+        _save_disk_cache()
         return None
 
     # Build the GameRating from the first (best-matching) result
@@ -170,8 +228,9 @@ def get_game_rating(
         background_image=r.get("background_image"),  # CDN hero image URL
     )
 
-    # Cache the successful result for future calls in this process
+    # Cache the successful result and persist to disk
     _SEARCH_CACHE[cache_key] = rating
+    _save_disk_cache()
     return rating
 
 

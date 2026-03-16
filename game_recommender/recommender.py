@@ -3,12 +3,11 @@ LLM-powered game recommender using Claude.
 
 Takes the user's library (with playtime and optional RAWG ratings data),
 then asks Claude to recommend what to play next. The web app also uses
-claude-opus-4-6 directly via AsyncAnthropic, so this module is primarily
+Claude directly via AsyncAnthropic, so this module is primarily
 used by the CLI. Both paths use the same model and prompt structure.
 
-The `thinking={"type": "adaptive"}` parameter lets Claude decide whether
-extended thinking is warranted. For library analysis it adds meaningful
-depth; for simple queries it skips thinking to save tokens and time.
+Default model is claude-sonnet-4-6 (fast, cheap). Users can switch to
+Opus and/or enable extended thinking via the web UI toggles.
 """
 
 import os
@@ -71,6 +70,8 @@ def get_recommendations(
     num_recommendations: int = 5,
     api_key: Optional[str] = None,
     stream_output: bool = True,
+    model: str = "claude-sonnet-4-6",
+    use_thinking: bool = False,
 ) -> str:
     """Ask Claude to recommend games from the user's library.
 
@@ -151,16 +152,20 @@ End with a brief 2-3 sentence overall note about patterns you notice in their li
 
 Be specific, enthusiastic, and personalized to their actual library. Don't recommend games outside their library."""
 
+    # Build common kwargs for the API call
+    api_kwargs = {
+        "model": model,
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if use_thinking:
+        api_kwargs["thinking"] = {"type": "adaptive"}
+
     if stream_output:
         # Stream mode: print each text chunk as it arrives so the CLI shows
         # a live response rather than waiting for the full generation.
         result_parts = []
-        with client.messages.stream(
-            model="claude-opus-4-6",
-            max_tokens=4096,
-            thinking={"type": "adaptive"},  # Let Claude decide if extended thinking helps
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
+        with client.messages.stream(**api_kwargs) as stream:
             for text in stream.text_stream:
                 print(text, end="", flush=True)  # flush=True ensures real-time output
                 result_parts.append(text)
@@ -169,12 +174,7 @@ Be specific, enthusiastic, and personalized to their actual library. Don't recom
     else:
         # Non-streaming mode: wait for the complete response before returning.
         # Used when streaming to stdout is not desired (e.g. piping to a file).
-        response = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=4096,
-            thinking={"type": "adaptive"},
-            messages=[{"role": "user", "content": prompt}],
-        )
+        response = client.messages.create(**api_kwargs)
         # Response content is a list of blocks (text + optional thinking blocks).
         # We find the first text block and return it, ignoring thinking blocks.
         return next(

@@ -31,8 +31,11 @@ def clear_ratings_cache():
     prevents leakage to tests in other modules.
     """
     ratings_module._SEARCH_CACHE.clear()
-    yield
+    ratings_module._cache_loaded = True  # Prevent disk I/O in tests
+    with patch("game_recommender.ratings._save_disk_cache"):
+        yield
     ratings_module._SEARCH_CACHE.clear()
+    ratings_module._cache_loaded = True
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
