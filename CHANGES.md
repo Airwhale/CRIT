@@ -2,6 +2,103 @@
 
 ## [Unreleased]
 
+### Library loading skeleton (streaming SSE enrichment)
+
+Games now appear in the table immediately after the platform fetch completes. RAWG ratings, Metacritic scores, genres, and release years stream in row-by-row as each lookup finishes concurrently in the background, rather than requiring a full wait for all enrichment to complete.
+
+#### `web/app.py`
+- Added `GET /api/library/stream` SSE endpoint. Event sequence:
+  1. `{"type": "games", "games": [...], "errors": [...]}` — emitted immediately after all platforms are fetched concurrently; games are unenriched at this point.
+  2. `{"type": "rawg_update", "game": {...}}` — one event per game as each RAWG lookup finishes (5-slot `asyncio.Semaphore`; results arrive out of order).
+  3. `{"type": "done"}` — signals stream completion.
+- Skips RAWG enrichment entirely when `skip_ratings=true` or no `RAWG_API_KEY` is set.
+- Forwards the `rawg_limit` query parameter to cap enrichment to the top N games by playtime.
+
+#### `web/templates/index.html`
+- Extracted `_sentinel` and `_cellFor` cell renderers to module scope so both `renderLibraryTable` and the new `_updateGameRow` share them (previously defined inline inside `renderLibraryTable`).
+- `renderLibraryTable` now adds `data-game-key="${platform}|${name}"` to each `<tr>` element for row lookup by the streaming updater.
+- Added `_updateGameRow(game)` — finds a row via `tbody.rows` array scan + `dataset.gameKey` comparison (avoids CSS selector escaping issues), re-renders the row in-place with updated RAWG fields, and re-attaches price hover handlers.
+- Rewrote `loadLibrary()` to use `EventSource` on `/api/library/stream`:
+  - On `games` event: hides the load form, shows the table, and displays a subtle "Loading ratings…" spinner in `lib-showing`.
+  - On `rawg_update`: updates `allGames[idx]` and calls `_updateGameRow` to patch the row without a full repaint.
+  - On `done`: clears the spinner, saves to disk cache via `POST /api/library/save`.
+
+#### `tests/test_web_api.py`
+- Added `TestLibraryStream` class (8 tests): games event emitted first, done always last, `skip_ratings` suppresses rawg_update events, one rawg_update per game with `RAWG_API_KEY` set, platform errors reported in games event, playtime sort order, cached library streamed immediately.
+
+---
+
+### ITAD (IsThereAnyDeal) price history integration
+
+The Steam Deals table now shows historical low prices and price history sparklines from IsThereAnyDeal.
+
+#### `game_recommender/itad.py`
+- Added `batch_lookup_game_ids(game_infos, api_key, max_workers=8)` — parallel ITAD ID resolution using `ThreadPoolExecutor`, matching by Steam app ID when available.
+- Added in-memory `_HISTORY_CACHE` with 6-hour TTL for price history responses.
+- Updated `get_overview()` to normalise the API response (handles both list and dict formats from the `/games/overview/v2` endpoint).
+- Updated `get_price_history()` to check and populate the in-memory cache.
+
+#### `web/app.py`
+- Added `_enrich_deals_with_itad(sale_games, itad_key)` — parallel ID lookup, batch overview call, and verdict assignment (`all_time_low` / `near_low` / `below_regular` / `no_data`) comparing current sale price to historical low.
+- Sales SSE stream now yields `{"itad_data": {...}}` after the deals event when `ITAD_API_KEY` is configured.
+- Deals payload now includes `app_id` field.
+
+#### `web/templates/index.html`
+- Added Chart.js CDN script for price history sparklines.
+- Added `#price-popover` singleton and CSS for the popover and ITAD verdict badges.
+- Deals table has a new "Hist. Low" column; `_itadCell(d)` renders the badge and price.
+- SSE handler updated to process `msg.itad_data` and update the deals table in-place.
+- `_attachPriceHoverHandlers()`, `_showPopoverLoading()`, `_showPopoverNoData()`, `_renderPriceChart()` — hovering a game name in the library table fetches price history and renders a Chart.js sparkline popover.
+- In-memory `_itadIdCache` and `_historyCache` avoid redundant network calls within a session.
+
+#### `.env.example`
+- Added `ITAD_API_KEY=` with a comment pointing to isthereanydeal.com/dev/app/.
+
+---
+
+### Session persistence (localStorage)
+
+Platform credentials and the loaded library are now saved to localStorage so they survive page refreshes without needing to reconnect or re-fetch.
+
+#### `web/app.py`
+- Added `POST /api/auth/epic/restore` and `POST /api/auth/gog/restore` endpoints that accept tokens from localStorage and restore the server-side session.
+- Updated `GET /api/status` to return `steam_user_id`, `epic_tokens`, and `gog_tokens` fields so the frontend can write them to localStorage on load.
+
+#### `web/templates/index.html`
+- Added `_lsGet`, `_lsSet`, `_lsDel` localStorage helpers.
+- `_tryRestoreFromLocalStorage()` — called on `init()`; posts saved credentials back to the restore endpoints so the connected state is immediately available.
+- `_tryLoadFromDiskCache()` — called on `init()` after platform status check; fetches `/api/library/cached` and shows the table immediately if a saved library exists, with a "Loaded from cache — click ↻ Refresh to reload" notice.
+- `loadLibrary()` posts to `/api/library/save` after a successful stream so the library is persisted for the next visit.
+- `markDisconnected()` now calls `_lsDel('crit_${platform}')` to clear the stored credential on disconnect.
+
+---
+
+### Recommendation history
+
+Past recommendations are saved in `localStorage` and displayed in a collapsible panel below the output.
+
+#### `web/templates/index.html`
+- Added `#history-section` card with a collapsible body.
+- `_saveRecommendationHistory(text)` — called after the `done` SSE event; stores up to 20 entries keyed by ISO timestamp.
+- `_loadRecommendationHistory()` and `_renderHistory()` — called on `init()`; renders saved entries as expandable items.
+- `_toggleHistoryItem(id)` — toggles the collapsed/expanded state of an individual history entry.
+
+---
+
+### Model and thinking controls
+
+The recommendation form now exposes model selection and extended thinking as explicit UI controls rather than hard-coded server defaults.
+
+#### `web/templates/index.html`
+- Added a model `<select>` (Sonnet 4.6 default / Haiku 4.5 / Opus 4.6) and a "Deep thinking" checkbox above the Recommend button.
+- `onModelChange()` — disables the thinking checkbox for Haiku (which does not support extended thinking).
+- The selected model and thinking flag are sent as query parameters to `/api/recommend`.
+
+#### `web/app.py`
+- `GET /api/recommend` now accepts `model` and `thinking` query parameters, forwarded to the Anthropic API call.
+
+---
+
 ### release_year, gog_rating, and tags fields
 
 Game objects and library API responses now carry three additional fields from platform data and RAWG:

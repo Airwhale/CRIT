@@ -315,7 +315,7 @@ class TestGetAllSales:
                 min_discount=30,
                 steam_api_key="key",
                 steam_user_id="uid",
-                include_wishlist=True,
+                sources={"steam_featured", "steam_wishlist"},
             )
 
         assert len(games) == 2
@@ -372,7 +372,7 @@ class TestGetAllSales:
 
         with patch("game_recommender.steam_sales.get_featured_specials", return_value=featured), \
              patch("game_recommender.steam_sales.get_wishlist_on_sale") as mock_wish:
-            games = get_all_sales(include_wishlist=False)
+            games = get_all_sales(sources={"steam_featured"})
 
         mock_wish.assert_not_called()
         assert len(games) == 1
@@ -384,8 +384,12 @@ class TestGetAllSales:
 
         with patch("game_recommender.steam_sales.get_featured_specials", return_value=featured), \
              patch("game_recommender.steam_sales.get_wishlist_on_sale") as mock_wish:
-            # No api_key or user_id provided
-            games = get_all_sales(steam_api_key=None, steam_user_id=None, include_wishlist=True)
+            # No api_key or user_id — wishlist requires credentials and is skipped silently
+            games = get_all_sales(
+                steam_api_key=None,
+                steam_user_id=None,
+                sources={"steam_featured", "steam_wishlist"},
+            )
 
         mock_wish.assert_not_called()  # Credentials are required for wishlist
 

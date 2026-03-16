@@ -15,8 +15,13 @@ All credentials stay in server memory and are never written to disk. Restarting 
 - **Backlog** — recommends unplayed or barely-touched games already sitting in your library
 - **Discover** — recommends games you don't own yet, drawn from Claude's broad knowledge of the medium
 - Unified library table merging Steam, Epic, and GOG with sortable, toggleable columns
+- **Streaming library load** — games appear in the table as soon as they are fetched; RAWG ratings fill in row-by-row rather than requiring a full wait
 - Live-streaming Claude responses with a blinking cursor as text arrives
+- **Model and thinking controls** — switch between Sonnet 4.6 (default), Haiku 4.5, or Opus 4.6, and toggle extended thinking for deeper analysis
 - RAWG ratings, Metacritic scores, genres, tags, and release years fetched and passed to Claude for context
+- **ITAD (IsThereAnyDeal) integration** — deals table shows historical low prices, badges (all-time low / near low / below regular), and sparkline price history on hover
+- **Session persistence** — platform credentials and library are saved to localStorage so they survive page refreshes
+- **Recommendation history** — past recommendations are saved in-browser and viewable in a collapsible panel
 - CSV export and import so you can back up or load your library without re-fetching
 - Supports Steam (OpenID login or API key), Epic Games (OAuth), and GOG (OAuth)
 
@@ -25,9 +30,10 @@ All credentials stay in server memory and are never written to disk. Restarting 
 ## Requirements
 
 - Python 3.11 or later
-- An [Anthropic API key](https://console.anthropic.com) (Claude claude-opus-4-6 is used for recommendations)
+- An [Anthropic API key](https://console.anthropic.com) (Sonnet 4.6 is the default; Haiku 4.5 and Opus 4.6 are selectable in the UI)
 - A [RAWG API key](https://rawg.io/apidocs) (free tier is plenty — used for ratings and genres)
 - At least one game platform connected (Steam is the most fully featured)
+- Optional: an [IsThereAnyDeal API key](https://isthereanydeal.com/dev/app/) — enables price history in the deals table
 
 ---
 
@@ -40,7 +46,7 @@ All credentials stay in server memory and are never written to disk. Restarting 
 3. Navigate to **API Keys** → **Create Key**
 4. Copy the key (starts with `sk-ant-`) into your `.env` as `ANTHROPIC_API_KEY`
 
-> Recommendations use Claude claude-opus-4-6 with adaptive thinking. Each recommendation call costs a few cents depending on library size.
+> The default model is **Sonnet 4.6**. You can switch to Haiku 4.5 (faster/cheaper) or Opus 4.6 (best quality) in the UI. The optional "Deep thinking" toggle enables extended reasoning for more nuanced picks. Each recommendation call costs a few cents on Sonnet; less on Haiku, more on Opus.
 
 ### RAWG (required for ratings)
 
@@ -147,6 +153,7 @@ Open `.env` and set:
 ```dotenv
 ANTHROPIC_API_KEY=sk-ant-...          # from console.anthropic.com
 RAWG_API_KEY=...                      # from rawg.io/apidocs (free)
+ITAD_API_KEY=...                      # optional — from isthereanydeal.com/dev/app/
 ```
 
 Steam credentials are entered in the web UI rather than `.env` — they are stored in the server's in-memory session for the duration of the process.
@@ -169,12 +176,14 @@ Connect at least one platform. You can connect all three; the library view merge
 
 ### Step 2 — Load library
 
-Click **Load Library**. The app fetches your game list from all connected platforms and enriches every title with RAWG ratings and genres. For large libraries this can take 30–60 seconds.
+Click **Load Library**. Your games appear in the table immediately after the platform fetch completes — you don't have to wait for all ratings to load. RAWG ratings, genres, and Metacritic scores fill in row-by-row as each lookup finishes in the background. A subtle "Loading ratings…" indicator shows while this is in progress.
 
 Two optional controls are available before clicking **Load Library**:
 
 - **Skip RAWG ratings** — skips enrichment entirely and loads in a few seconds. Claude will have less context but will still work.
 - **Enrich only top N games with RAWG** — type a number (e.g. `200`) to cap enrichment to the most-played N games. Leave blank to enrich all games (the default).
+
+If you have previously loaded your library, it is automatically restored from cache on the next visit so you can jump straight to recommendations without waiting for a fetch.
 
 ### Step 3 — Get recommendations
 
@@ -195,7 +204,12 @@ Choose a mode with the tab switcher:
 **Backlog options:**
 - **Count as "unplayed" if under X minutes** — games with playtime below this threshold are treated as unplayed (default 60 minutes)
 
-Click **✨ Recommend** and watch Claude's response stream in live.
+**Model options (above the Recommend button):**
+
+- **Model selector** — choose Sonnet 4.6 (default, balanced), Haiku 4.5 (fastest/cheapest), or Opus 4.6 (best quality)
+- **Deep thinking** — enable extended reasoning for more thoughtful picks (Sonnet or Opus only)
+
+Click **✨ Recommend** and watch Claude's response stream in live. Past recommendations are automatically saved and accessible via the **Recommendation History** panel below the output.
 
 ---
 
@@ -390,7 +404,7 @@ The test suite covers every module with both success and failure scenarios, plus
 python -m pytest tests/ -v
 ```
 
-Expected output: **186 tests, 0 failures.**
+Expected output: **196 tests, 0 failures.**
 
 ### Test layout
 
@@ -402,7 +416,7 @@ tests/
 ├── test_gog.py          — GOG OAuth + library (28 tests)
 ├── test_ratings.py      — RAWG ratings + enrich_games (22 tests)
 ├── test_steam_sales.py  — featured specials, wishlist, get_all_sales (33 tests)
-└── test_web_api.py      — FastAPI endpoints end-to-end (47 tests)
+└── test_web_api.py      — FastAPI endpoints end-to-end (59 tests)
 ```
 
 ### What's covered
@@ -414,4 +428,4 @@ tests/
 | GOG | Token exchange & refresh, single/paginated library, alphabetical sort, blank-title skip, `release_year` from unix timestamp, `gog_rating` from community score | Bad code, expired token, HTTP / network error | `totalPages=0` makes one request, `title: null` skipped, `products: null` returns empty list, `id=0` stored as `"0"`, zero rating → `None`, missing date → `None` |
 | Ratings | Full `GameRating` fields, `None` on no results, case-insensitive cache, tags capped at 10, progress callback | Missing API key, HTTP error, network error | Minimal result (sparse fields), <10 tags all returned, `delay=0` valid, per-name cache isolation |
 | Steam sales | Discount filter, sort, price formatting, wishlist date ordering, `max_check` cap, `get_all_sales` merge / wishlist-first / dedup / owned-game filter | HTTP errors, failed appdetails batch skipped, featured/wishlist errors handled gracefully | `discount == min_discount` included (strict `<`), `min_discount=0`, price `0` → `"unknown"`/`"free"`, `id=0` kept, wishlist version wins dedup, `owned_app_ids=None` |
-| Web API | HTML + security headers, Steam auth + cookie + game_count, platform status, disconnect, library, SSE streaming all three modes, `count` clamping, full response field schema | Missing fields (400), whitespace-only credentials (400), private Steam profile (400), no session, no API key, invalid mode, preferences too long, empty library, Claude exception | Whitespace credentials stripped → 400, `count=0` clamped to 1, `preferences` exactly 500 chars accepted, quotes/newlines in SSE text survive round-trip, `playtime == max_new_minutes` is unplayed, `playtime == 61` at threshold is played, `rawg_limit` query param caps enrichment, RAWG failure returns unenriched games, partial platform failure returns surviving platform, session persists across calls |
+| Web API | HTML + security headers, Steam auth + cookie + game_count, platform status, disconnect, library, library stream SSE (games event, rawg_update per game, done event, skip_ratings, cached library), recommend SSE streaming all three modes, `count` clamping, full response field schema | Missing fields (400), whitespace-only credentials (400), private Steam profile (400), no session, no API key, invalid mode, preferences too long, empty library, Claude exception, platform error in stream | Whitespace credentials stripped → 400, `count=0` clamped to 1, `preferences` exactly 500 chars accepted, quotes/newlines in SSE text survive round-trip, `playtime == max_new_minutes` is unplayed, `playtime == 61` at threshold is played, `rawg_limit` query param caps enrichment, RAWG failure returns unenriched games, partial platform failure returns surviving platform, session persists across calls |

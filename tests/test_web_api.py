@@ -10,6 +10,7 @@ Organisation:
   - TestStatus              – GET /api/status (per-session platform flags)
   - TestDisconnect          – DELETE /api/auth/{platform}
   - TestLibrary             – GET /api/library (fetch, sort, skip_ratings)
+  - TestLibraryStream       – GET /api/library/stream (SSE skeleton loading)
   - TestRecommend           – GET /api/recommend SSE stream (3 modes + error paths)
   - TestSteamAuthCornerCases  – edge inputs and Steam API error mappings
   - TestLibraryCornerCases    – RAWG failure, partial platform failure, top-75 boundary
@@ -461,9 +462,10 @@ class TestRecommend:
                      original_price_cents=5999, sale_price_cents=2399),
         ]
 
-        # Sales mode patches both _fetch_steam and _fetch_sales
+        # Sales mode patches both _fetch_steam and _fetch_sales.
+        # _fetch_sales returns (games, warnings) — mock must match that signature.
         with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
-             patch("web.app._fetch_sales", return_value=fake_sales), \
+             patch("web.app._fetch_sales", return_value=(fake_sales, [])), \
              patch("web.app.anthropic.AsyncAnthropic",
                    return_value=make_claude_client(["Cyberpunk 2077 is a great deal!"])):
             resp = client.get(
@@ -982,3 +984,136 @@ class TestRecommendCornerCases:
         for _ in range(2):
             resp = self._recommend(client, session_id)
             assert any(e.get("done") is True for e in parse_sse(resp.text))
+
+
+# ── GET /api/library/stream (SSE skeleton loading) ────────────────────────────
+
+class TestLibraryStream:
+    """Tests for GET /api/library/stream — streaming library load via SSE.
+
+    The endpoint emits three event types:
+      1. {"type": "games",       "games": [...], "errors": [...]}  — immediately after platform fetch
+      2. {"type": "rawg_update", "game": {...}}                    — one per enriched game (skip_ratings=false)
+      3. {"type": "done"}
+
+    This class verifies the event sequence, field presence, and error handling
+    for the streaming skeleton loader.
+    """
+
+    def _stream(self, client, session_id, **params):
+        """GET /api/library/stream with given query params."""
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"/api/library/stream?{qs}" if qs else "/api/library/stream"
+        return client.get(url, cookies={"session_id": session_id})
+
+    def test_no_platforms_returns_400(self, client):
+        """No session / no connected platform → 400 before any streaming."""
+        resp = client.get("/api/library/stream")
+        assert resp.status_code == 400
+
+    def test_games_event_emitted_first(self, client):
+        """The first SSE event must have type='games' and contain the games list."""
+        session_id = "sess-stream-games"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES):
+            resp = self._stream(client, session_id, skip_ratings="true")
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        games_events = [e for e in events if e.get("type") == "games"]
+        assert len(games_events) == 1
+        assert len(games_events[0]["games"]) == len(FAKE_GAMES)
+
+    def test_done_event_always_last(self, client):
+        """The stream always ends with a type='done' event."""
+        session_id = "sess-stream-done"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES):
+            resp = self._stream(client, session_id, skip_ratings="true")
+
+        events = parse_sse(resp.text)
+        assert events[-1].get("type") == "done"
+
+    def test_skip_ratings_produces_no_rawg_update_events(self, client):
+        """With skip_ratings=true, no rawg_update events are emitted."""
+        session_id = "sess-stream-skip"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
+             patch("web.app._enrich_with_rawg") as mock_rawg:
+            resp = self._stream(client, session_id, skip_ratings="true")
+
+        mock_rawg.assert_not_called()
+        events = parse_sse(resp.text)
+        assert not any(e.get("type") == "rawg_update" for e in events)
+
+    def test_rawg_update_events_emitted_per_game(self, client, monkeypatch):
+        """With skip_ratings=false and RAWG_API_KEY set, one rawg_update per game is emitted."""
+        monkeypatch.setenv("RAWG_API_KEY", "rawg-key")
+        session_id = "sess-stream-rawg"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        from game_recommender.ratings import GameRating
+        fake_rating = GameRating(
+            name="The Witcher 3",
+            rawg_rating=4.7,
+            metacritic_score=93,
+            genres=["RPG"],
+            tags=["Open World"],
+            released="2015-05-19",
+        )
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
+             patch("game_recommender.ratings.get_game_rating", return_value=fake_rating):
+            resp = self._stream(client, session_id, skip_ratings="false")
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        rawg_events = [e for e in events if e.get("type") == "rawg_update"]
+        # One rawg_update per game in FAKE_GAMES
+        assert len(rawg_events) == len(FAKE_GAMES)
+        # Each update carries the enriched game dict
+        assert all("game" in e for e in rawg_events)
+
+    def test_platform_error_reported_in_games_event(self, client):
+        """A platform fetch failure appears in errors list within the games event."""
+        session_id = "sess-stream-err"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        with patch("web.app._fetch_steam", side_effect=RuntimeError("profile is private")):
+            resp = self._stream(client, session_id, skip_ratings="true")
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        games_event = next(e for e in events if e.get("type") == "games")
+        assert any(err["platform"] == "steam" for err in games_event["errors"])
+        assert games_event["games"] == []
+
+    def test_games_sorted_by_playtime_descending(self, client):
+        """Games in the initial games event are sorted most-played first."""
+        session_id = "sess-stream-sort"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES):
+            resp = self._stream(client, session_id, skip_ratings="true")
+
+        events = parse_sse(resp.text)
+        games = next(e for e in events if e.get("type") == "games")["games"]
+        playtimes = [g["playtime_minutes"] for g in games]
+        assert playtimes == sorted(playtimes, reverse=True)
+
+    def test_cached_library_streamed_without_rawg(self, client):
+        """A session with a cached library (no platform) streams it and completes immediately."""
+        session_id = "sess-stream-cache"
+        _sessions[session_id] = {"library": FAKE_GAMES}
+
+        resp = self._stream(client, session_id)
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        assert any(e.get("type") == "games" for e in events)
+        assert events[-1].get("type") == "done"
+        # No RAWG enrichment for pre-cached libraries
+        assert not any(e.get("type") == "rawg_update" for e in events)
