@@ -7,6 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iIzBkMGQxYSIvPjxyZWN0IHg9IjMiIHk9IjE0IiB3aWR0aD0iNyIgaGVpZ2h0PSIxMSIgcng9IjMuNSIgZmlsbD0iIzdjNmFmZiIvPjxyZWN0IHg9IjIyIiB5PSIxNCIgd2lkdGg9IjciIGhlaWdodD0iMTEiIHJ4PSIzLjUiIGZpbGw9IiM3YzZhZmYiLz48cmVjdCB4PSI2IiB5PSIxMCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjEzIiByeD0iNCIgZmlsbD0iIzdjNmFmZiIvPjxyZWN0IHg9IjExIiB5PSIxNCIgd2lkdGg9IjIiIGhlaWdodD0iNiIgcng9IjEiIGZpbGw9IiMwZDBkMWEiLz48cmVjdCB4PSIxMCIgeT0iMTYiIHdpZHRoPSI0IiBoZWlnaHQ9IjIiIHJ4PSIxIiBmaWxsPSIjMGQwZDFhIi8+PGNpcmNsZSBjeD0iMjIiIGN5PSIxNCIgcj0iMS41IiBmaWxsPSIjMzRkMzk5Ii8+PGNpcmNsZSBjeD0iMjQuNSIgY3k9IjE3IiByPSIxLjUiIGZpbGw9IiNmYmJmMjQiLz48Y2lyY2xlIGN4PSIxOS41IiBjeT0iMTciIHI9IjEuNSIgZmlsbD0iI2Y4NzE3MSIvPjxjaXJjbGUgY3g9IjIyIiBjeT0iMjAiIHI9IjEuNSIgZmlsbD0iI2E3OGJmYSIvPjwvc3ZnPg==">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
   /* ── Variables ── */
   :root {
@@ -528,6 +529,78 @@
   .ins-bar-games { background: var(--accent); }
   .ins-bar-hours { background: #34d399; }
   .ins-bar-label { color: var(--muted); font-size: 0.75rem; white-space: nowrap; min-width: 32px; }
+
+  /* ── Price history popover ── */
+  #price-popover {
+    position: fixed;
+    z-index: 9999;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.75rem 1rem 0.5rem;
+    width: 320px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    pointer-events: none;
+    display: none;
+  }
+  #price-popover.visible { display: block; }
+  #price-popover .pop-title { font-size: 0.82rem; font-weight: 700; margin-bottom: 0.4rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #price-popover .pop-footer { font-size: 0.72rem; color: var(--muted); margin-top: 0.4rem; display: flex; justify-content: space-between; align-items: center; }
+  #price-popover .pop-footer a { color: var(--accent2); text-decoration: none; font-size: 0.72rem; }
+  #price-popover .pop-footer a:hover { text-decoration: underline; }
+  #price-popover .pop-loading { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 1.5rem 0; }
+  #price-popover .pop-low { font-size: 0.78rem; color: var(--green); font-weight: 600; }
+  #price-popover .pop-no-data { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 1.5rem 0; }
+
+  /* ITAD historical low badges in deals table */
+  .itad-badge { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 2px 5px; border-radius: 3px; white-space: nowrap; }
+  .itad-badge.all-time-low { background: rgba(52,211,153,0.2); color: var(--green); }
+  .itad-badge.near-low     { background: rgba(251,191,36,0.2);  color: var(--yellow); }
+  .itad-badge.below-reg    { background: rgba(148,163,184,0.1); color: var(--muted); }
+
+  /* ── Recommendation History panel ── */
+  #history-section { display: none; }
+  #history-section.has-items { display: block; }
+  .history-list { display: flex; flex-direction: column; gap: 0.75rem; max-height: 500px; overflow-y: auto; }
+  .history-list::-webkit-scrollbar { width: 6px; }
+  .history-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .history-item {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .history-item:hover { border-color: var(--accent); }
+  .history-item .hist-meta { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+  .history-item .hist-time { font-size: 0.72rem; color: var(--muted); }
+  .history-item .hist-mode { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; background: rgba(124,106,255,0.2); color: var(--accent2); padding: 1px 5px; border-radius: 3px; }
+  .history-item .hist-prefs { font-size: 0.78rem; color: var(--muted); font-style: italic; }
+  .history-item .hist-preview { font-size: 0.8rem; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .history-output {
+    margin-top: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    font-size: 0.88rem;
+    display: none;
+  }
+  .history-output.visible { display: block; }
+  .history-output h1,.history-output h2 { font-size: 1rem; margin: 0.8rem 0 0.3rem; color: var(--accent2); }
+  .history-output h3 { font-size: 0.9rem; margin: 0.7rem 0 0.25rem; }
+  .history-output p { margin-bottom: 0.5rem; }
+  .history-output ul { padding-left: 1.1rem; margin-bottom: 0.5rem; }
+  .history-output li { margin-bottom: 0.2rem; }
+  .history-output strong { color: var(--accent2); }
+
+  /* ── Model/thinking controls ── */
+  .model-row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem; }
+  .model-row label { margin-bottom: 0; color: var(--muted); font-size: 0.8rem; }
+  .model-row select { width: auto; max-width: 220px; font-size: 0.82rem; }
+  .model-row .thinking-toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; cursor: pointer; }
+  .model-row .thinking-toggle input { width: auto; accent-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -812,6 +885,18 @@
       </div>
     </div>
 
+    <div class="model-row">
+      <label>Model:</label>
+      <select id="rec-model" onchange="onModelChange()">
+        <option value="claude-sonnet-4-6" selected>Sonnet 4.6 (default)</option>
+        <option value="claude-haiku-4-5-20251001">Haiku 4.5 (fastest/cheapest)</option>
+        <option value="claude-opus-4-6">Opus 4.6 (best quality)</option>
+      </select>
+      <label class="thinking-toggle" id="thinking-label">
+        <input type="checkbox" id="rec-thinking"> Deep thinking <small style="color:var(--muted)">(slower)</small>
+      </label>
+    </div>
+
     <div id="rec-output">
       <div id="rec-status-line" class="rec-status" hidden></div>
       <div id="deals-table-wrap" hidden></div>
@@ -819,6 +904,15 @@
       <span class="streaming-cursor" id="rec-cursor" hidden></span>
     </div>
   </div><!-- step 3 card -->
+
+  <!-- ── Recommendation History ─────────────────────────────────────────────── -->
+  <div class="card" id="history-section">
+    <div class="section-header">
+      <span class="step-num" style="background:var(--bg3);color:var(--accent2);font-size:1rem;">⏱</span>
+      <h2>Recommendation History</h2>
+    </div>
+    <div id="history-list" class="history-list"></div>
+  </div>
 
   <!-- ── Genre Bubble Chart ─────────────────────────────────────────────────── -->
   <div class="card" id="viz-section" hidden>
@@ -835,10 +929,18 @@
 
 </main>
 
+<!-- Price history popover (singleton, repositioned on each hover) -->
+<div id="price-popover">
+  <div class="pop-title" id="pop-title"></div>
+  <div id="pop-body"><div class="pop-loading"><span class="spinner"></span> Loading…</div></div>
+  <div class="pop-footer" id="pop-footer"></div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 let allGames = [];         // full library from API
 let filteredGames = [];    // after search/filter
+let _priceChartInstance = null;  // singleton Chart.js instance
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 (async function init() {
@@ -855,16 +957,101 @@ let filteredGames = [];    // after search/filter
     history.replaceState({}, '', '/');
   }
 
+  // Try to restore session from localStorage first (survives server restarts)
+  await _tryRestoreFromLocalStorage();
+
   try {
     const status = await apiFetch('/api/status');
-    if (status.steam) markConnected('steam');
+    if (status.steam) markConnected('steam', status.steam_has_api_key);
     if (status.epic)  markConnected('epic');
     if (status.gog)   markConnected('gog');
-    if (status.steam || status.epic || status.gog) {
+
+    const anyConnected = status.steam || status.epic || status.gog;
+    if (anyConnected) {
       document.getElementById('library-section').removeAttribute('hidden');
+      // Auto-load from disk cache for instant startup
+      _tryLoadFromDiskCache();
     }
   } catch(e) { /* fresh session */ }
+
+  // Load recommendation history
+  _loadRecommendationHistory();
 })();
+
+async function _tryRestoreFromLocalStorage() {
+  const steamData = _lsGet('crit_steam');
+  if (steamData && steamData.user_id) {
+    try {
+      await apiFetch('/api/auth/steam', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({user_id: steamData.user_id, api_key: steamData.api_key || null}),
+      });
+    } catch(e) {
+      _lsDel('crit_steam');
+    }
+  }
+
+  const epicData = _lsGet('crit_epic');
+  if (epicData && epicData.access_token) {
+    try {
+      await apiFetch('/api/auth/epic/restore', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(epicData),
+      });
+    } catch(e) {
+      _lsDel('crit_epic');
+    }
+  }
+
+  const gogData = _lsGet('crit_gog');
+  if (gogData && gogData.access_token) {
+    try {
+      await apiFetch('/api/auth/gog/restore', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(gogData),
+      });
+    } catch(e) {
+      _lsDel('crit_gog');
+    }
+  }
+}
+
+async function _tryLoadFromDiskCache() {
+  try {
+    const data = await apiFetch('/api/library/cached');
+    if (data.games && data.games.length > 0) {
+      allGames = data.games;
+      document.getElementById('lib-search').value = '';
+      ['steam','epic','gog'].forEach(p => {
+        const cb = document.getElementById(`filter-${p}`);
+        if (cb) cb.checked = true;
+      });
+      _ensureTableInit();
+      filterLibrary();
+      document.getElementById('library-content').removeAttribute('hidden');
+      document.getElementById('library-load-area').setAttribute('hidden', '');
+      document.getElementById('rec-section').removeAttribute('hidden');
+      document.getElementById('viz-section').removeAttribute('hidden');
+      renderLibraryInsights();
+      // Show a subtle "from cache" indicator
+      document.getElementById('lib-showing').textContent = 'Loaded from cache — click ↻ Refresh to reload from your platforms';
+    }
+  } catch(e) { /* no cache or error — normal load flow */ }
+}
+
+// ── localStorage helpers ────────────────────────────────────────────────────────
+function _lsGet(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch(e) { return null; }
+}
+function _lsSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+}
+function _lsDel(key) {
+  try { localStorage.removeItem(key); } catch(e) {}
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 async function apiFetch(url, opts = {}) {
@@ -930,6 +1117,9 @@ function markDisconnected(platform) {
   } else {
     document.getElementById(`${platform}-connected`).setAttribute('hidden', '');
   }
+
+  // Clear localStorage on disconnect
+  _lsDel(`crit_${platform}`);
 }
 
 // ── Steam ──────────────────────────────────────────────────────────────────────
@@ -947,6 +1137,7 @@ async function connectSteam() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId }),
     });
+    _lsSet('crit_steam', { user_id: userId });
     markConnected('steam');
   } catch(e) {
     showError('steam-error', e.message);
@@ -972,6 +1163,11 @@ async function submitEpicCode() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ auth_code: code }),
     });
+    // Fetch status to get tokens for localStorage persistence
+    try {
+      const status = await apiFetch('/api/status');
+      if (status.epic_tokens) _lsSet('crit_epic', status.epic_tokens);
+    } catch(e) {}
     markConnected('epic');
   } catch(e) {
     showError('epic-error', 'Auth failed: ' + e.message);
@@ -996,6 +1192,11 @@ async function submitGogCode() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ auth_code: code }),
     });
+    // Fetch status to get tokens for localStorage persistence
+    try {
+      const status = await apiFetch('/api/status');
+      if (status.gog_tokens) _lsSet('crit_gog', status.gog_tokens);
+    } catch(e) {}
     markConnected('gog');
   } catch(e) {
     showError('gog-error', 'Auth failed: ' + e.message);
@@ -1010,13 +1211,16 @@ async function disconnect(platform) {
 
 // ── Library ────────────────────────────────────────────────────────────────────
 async function loadLibrary() {
-  const skipRatings = document.getElementById('skip-ratings').checked;
-  const rawgLimitVal = document.getElementById('rawg-limit').value.trim();
+  const skipRatings = document.getElementById('skip-ratings')?.checked ?? false;
+  const rawgLimitVal = document.getElementById('rawg-limit')?.value.trim() ?? '';
   const rawgLimit    = rawgLimitVal ? parseInt(rawgLimitVal, 10) : null;
+  const loadArea = document.getElementById('library-load-area');
   const loadStatus = document.getElementById('library-load-status');
   const content = document.getElementById('library-content');
   const errDiv = document.getElementById('library-errors');
 
+  // Show load area (in case we're refreshing from the library view)
+  loadArea.removeAttribute('hidden');
   loadStatus.innerHTML = '<span class="spinner"></span> Loading your library…<br><small style="color:var(--muted);margin-top:4px;display:block;">Fetching games and RAWG ratings — large libraries (800+ games) can take several minutes. Use the limit input above to cap enrichment and speed things up.</small>';
   content.setAttribute('hidden', '');
   errDiv.innerHTML = '';
@@ -1027,16 +1231,11 @@ async function loadLibrary() {
     allGames = data.games || [];
 
     // Reset all filter controls to a clean state so every load starts fresh.
-    // This guarantees that games from all connected platforms are always visible
-    // right after loading — no stale search or unchecked platform from a previous
-    // session can accidentally hide games.
     document.getElementById('lib-search').value = '';
     ['steam', 'epic', 'gog'].forEach(p => {
       const cb = document.getElementById(`filter-${p}`);
       if (cb) cb.checked = true;
     });
-    // filterLibrary() is the single rendering path — it reads the (now-reset)
-    // filter controls, rebuilds filteredGames from allGames, sorts, and renders.
     _ensureTableInit();
     filterLibrary();
 
@@ -1046,12 +1245,19 @@ async function loadLibrary() {
       });
     }
 
+    loadArea.setAttribute('hidden', '');
     content.removeAttribute('hidden');
     document.getElementById('rec-section').removeAttribute('hidden');
     document.getElementById('viz-section').removeAttribute('hidden');
     renderLibraryInsights();
-
     loadStatus.innerHTML = '';
+
+    // Save to disk cache for instant next load
+    fetch('/api/library/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({games: allGames}),
+    }).catch(() => {});
   } catch(e) {
     loadStatus.innerHTML = `<div class="notice error visible">Failed to load library: ${e.message}</div>`;
   }
@@ -1128,7 +1334,10 @@ function renderLibraryTable(games) {
     : '<span style="color:var(--border)">○</span>';
 
   const cellFor = {
-    name: g => `<td>${escHtml(g.name)}</td>`,
+    name: g => {
+      const appId = g.app_id ? ` data-appid="${escHtml(g.app_id)}"` : '';
+      return `<td><span class="game-name-hover" data-name="${escHtml(g.name)}"${appId}>${escHtml(g.name)}</span></td>`;
+    },
     platform: g => `<td><span class="badge badge-${g.platform}">${g.platform}</span></td>`,
     playtime: g => {
       const h = g.playtime_minutes > 0
@@ -1181,6 +1390,8 @@ function renderLibraryTable(games) {
     `<tr>${visCols.map(c => cellFor[c.key](g)).join('')}</tr>`
   ).join('');
   document.getElementById('lib-showing').textContent = '';
+  // Attach ITAD price-history hover handlers to the freshly rendered rows
+  setTimeout(_attachPriceHoverHandlers, 0);
 }
 
 function filterLibrary() {
@@ -1379,6 +1590,22 @@ function _parseCSV(text) {
   });
 }
 
+// ── Model toggle ──────────────────────────────────────────────────────────────
+function onModelChange() {
+  const model = document.getElementById('rec-model').value;
+  const thinkingLabel = document.getElementById('thinking-label');
+  const thinkingCb = document.getElementById('rec-thinking');
+  // Haiku doesn't support extended thinking
+  if (model === 'claude-haiku-4-5-20251001') {
+    thinkingCb.checked = false;
+    thinkingCb.disabled = true;
+    thinkingLabel.style.opacity = '0.4';
+  } else {
+    thinkingCb.disabled = false;
+    thinkingLabel.style.opacity = '1';
+  }
+}
+
 // ── Mode tabs ──────────────────────────────────────────────────────────────────
 let activeMode = 'library';
 
@@ -1412,6 +1639,8 @@ function getRecommendations() {
     .map(([key]) => key)
     .join(',');
   const maxNewMin   = parseInt(document.getElementById('max-new-minutes').value) || 60;
+  const model       = document.getElementById('rec-model')?.value || 'claude-sonnet-4-6';
+  const useThinking = document.getElementById('rec-thinking')?.checked || false;
 
   const output     = document.getElementById('rec-output');
   const content    = document.getElementById('rec-content');
@@ -1427,6 +1656,26 @@ function getRecommendations() {
   function parsePrice(str) {
     const n = parseFloat((str || '').replace(/[^0-9.]/g, ''));
     return isNaN(n) ? 0 : n;
+  }
+
+  function _itadCell(d) {
+    const itad = itadDataStore[d.name];
+    if (!itad || itad.verdict === 'no_data' || !itad.hist_low) {
+      return itad ? '' : '<span style="color:var(--border);font-size:0.72rem;">…</span>';
+    }
+    const price = `$${itad.hist_low.toFixed(2)}`;
+    const date  = itad.hist_low_date ? ` ${itad.hist_low_date}` : '';
+    const store = itad.hist_low_store ? ` on ${escHtml(itad.hist_low_store)}` : '';
+    const itadUrl = itad.slug ? `https://isthereanydeal.com/game/${escHtml(itad.slug)}/history/` : '';
+    const link = itadUrl ? `<a href="${itadUrl}" target="_blank" rel="noopener noreferrer" title="View full history on ITAD" style="color:var(--muted);font-size:0.65rem;margin-left:3px;">↗</a>` : '';
+
+    if (itad.verdict === 'all_time_low') {
+      return `<span class="itad-badge all-time-low" title="All-time low!${store}${date}">🟢 All-time low!</span>${link}`;
+    } else if (itad.verdict === 'near_low') {
+      return `<span class="itad-badge near-low" title="Near historical low${store}${date}">${price} low</span>${link}`;
+    } else {
+      return `<span class="itad-badge below-reg" title="Historical low: ${price}${store}${date}">low: ${price}</span>${link}`;
+    }
   }
 
   function renderDealsTable() {
@@ -1453,6 +1702,7 @@ function getRecommendations() {
         <td class="col-discount">${d.discount}%</td>
         <td class="col-sale">${escHtml(d.sale)}</td>
         <td class="col-orig">${escHtml(d.original)}</td>
+        <td>${_itadCell(d)}</td>
         <td class="col-link">${link}</td>
       </tr>`;
     }).join('');
@@ -1483,12 +1733,15 @@ function getRecommendations() {
     mode:             activeMode,
     preferences:      document.getElementById('preferences').value.trim(),
     count,
-    min_discount:  minDiscount,
-    deal_sources:  dealSources,
+    min_discount:     minDiscount,
+    deal_sources:     dealSources,
     max_new_minutes:  maxNewMin,
+    model,
+    use_thinking:     useThinking,
   });
 
   let rawText = '';
+  let itadDataStore = {};   // game name → ITAD enrichment
   const es = new EventSource(`/api/recommend?${params}`);
 
   es.onmessage = (e) => {
@@ -1502,6 +1755,11 @@ function getRecommendations() {
       btn.innerHTML = '✨ Recommend';
       content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
       linkifyGameNames();
+      // Save to recommendation history
+      if (rawText) {
+        const prefsText = document.getElementById('preferences').value.trim();
+        _saveRecommendationHistory(activeMode, prefsText, rawText);
+      }
       return;
     }
 
@@ -1521,16 +1779,42 @@ function getRecommendations() {
       return;
     }
 
+    if (msg.warnings) {
+      // Show yellow warning notices for deal sources that failed
+      const warnHtml = msg.warnings.map(w =>
+        `<div class="notice info visible" style="margin-bottom:4px;">⚠ ${escHtml(w)}</div>`
+      ).join('');
+      if (warnHtml) {
+        const existing = dealsWrap.querySelector('.deal-warnings');
+        if (existing) existing.innerHTML = warnHtml;
+        else {
+          const div = document.createElement('div');
+          div.className = 'deal-warnings';
+          div.innerHTML = warnHtml;
+          dealsWrap.before(div);
+        }
+      }
+      return;
+    }
+
+    if (msg.itad_data) {
+      itadDataStore = msg.itad_data;
+      // Re-render deals table with historical low column if it exists
+      if (dealsData.length) renderDealsTable();
+      return;
+    }
+
     if (msg.deals) {
       dealsData = msg.deals;
+      itadDataStore = {};
       dealsSortCol = null;
       dealsSortAsc = true;
-      const count = dealsData.length;
+      const dealCount = dealsData.length;
       dealsWrap.innerHTML = `
         <details>
           <summary>
             <span class="toggle-arrow">▶</span>
-            ${count} deal${count !== 1 ? 's' : ''} found — click to browse
+            ${dealCount} deal${dealCount !== 1 ? 's' : ''} found — click to browse
           </summary>
           <div class="deals-scroll">
             <table>
@@ -1541,6 +1825,7 @@ function getRecommendations() {
                 <th class="sortable" data-col="discount">Discount</th>
                 <th class="sortable" data-col="sale">Sale Price</th>
                 <th class="sortable" data-col="original">Original</th>
+                <th id="itad-col-header" style="white-space:nowrap;color:var(--muted);font-size:0.73rem;">Hist. Low</th>
                 <th></th>
               </tr></thead>
               <tbody></tbody>
@@ -1598,6 +1883,257 @@ function linkifyGameNames() {
     a.appendChild(el.cloneNode(true));
     el.replaceWith(a);
   });
+}
+
+// ── Price history hover chart ──────────────────────────────────────────────────
+const _itadIdCache = {};     // game name → itad_id (session cache)
+const _historyCache = {};    // itad_id → history data (session cache)
+let _popoverHideTimeout = null;
+
+// Attach hover handlers to game name cells in the library table
+function _attachPriceHoverHandlers() {
+  const popover = document.getElementById('price-popover');
+  document.querySelectorAll('.game-name-hover').forEach(el => {
+    if (el.dataset.hoverBound) return;
+    el.dataset.hoverBound = '1';
+    el.style.cursor = 'help';
+    el.style.borderBottom = '1px dotted var(--muted)';
+
+    el.addEventListener('mouseenter', async (evt) => {
+      clearTimeout(_popoverHideTimeout);
+      const name  = el.dataset.name;
+      const appId = el.dataset.appid || null;
+      _showPopoverLoading(popover, name, evt);
+
+      try {
+        // Step 1: Resolve ITAD game ID
+        let gameId = _itadIdCache[name];
+        if (!gameId) {
+          const params = new URLSearchParams({title: name});
+          if (appId) params.set('app_id', appId);
+          const resp = await apiFetch(`/api/itad/lookup?${params}`);
+          if (!resp.found) {
+            _showPopoverNoData(popover);
+            return;
+          }
+          gameId = resp.id;
+          _itadIdCache[name] = gameId;
+        }
+
+        // Step 2: Fetch price history
+        let history = _historyCache[gameId];
+        if (!history) {
+          const resp = await apiFetch(`/api/itad/history?game_id=${encodeURIComponent(gameId)}`);
+          history = resp.history || [];
+          _historyCache[gameId] = history;
+        }
+
+        if (!history.length) {
+          _showPopoverNoData(popover);
+          return;
+        }
+
+        _renderPriceChart(popover, name, history, gameId);
+      } catch(e) {
+        _showPopoverNoData(popover);
+      }
+    });
+
+    el.addEventListener('mouseleave', () => {
+      _popoverHideTimeout = setTimeout(() => {
+        popover.classList.remove('visible');
+      }, 200);
+    });
+  });
+
+  // Keep popover visible when hovering over it
+  popover.addEventListener('mouseenter', () => clearTimeout(_popoverHideTimeout));
+  popover.addEventListener('mouseleave', () => {
+    _popoverHideTimeout = setTimeout(() => popover.classList.remove('visible'), 200);
+  });
+}
+
+function _positionPopover(popover, triggerEl) {
+  const rect = triggerEl.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = rect.left + window.scrollX;
+  let top  = rect.bottom + window.scrollY + 6;
+
+  // Prevent overflow right
+  if (left + 320 > vw - 10) left = vw - 330;
+  // Prevent overflow bottom — show above if needed
+  if (top + 220 > vh + window.scrollY) top = rect.top + window.scrollY - 220;
+
+  popover.style.left = `${Math.max(4, left)}px`;
+  popover.style.top  = `${top}px`;
+}
+
+function _showPopoverLoading(popover, name, evt) {
+  document.getElementById('pop-title').textContent = name;
+  document.getElementById('pop-body').innerHTML = '<div class="pop-loading"><span class="spinner"></span> Loading…</div>';
+  document.getElementById('pop-footer').innerHTML = '';
+  _positionPopover(popover, evt.currentTarget);
+  popover.classList.add('visible');
+}
+
+function _showPopoverNoData(popover) {
+  document.getElementById('pop-body').innerHTML = '<div class="pop-no-data">No price history available</div>';
+  document.getElementById('pop-footer').innerHTML = '';
+}
+
+function _renderPriceChart(popover, name, history, gameId) {
+  // Normalize history entries → [{ts, price}]
+  const points = [];
+  for (const entry of history) {
+    // History v2 may be grouped by shop or flat list
+    const items = Array.isArray(entry) ? entry : [entry];
+    for (const item of items) {
+      const ts    = item.timestamp || item.ts;
+      const price = (item.deal || item).price?.amount ?? (item.deal || item).price;
+      if (ts && price != null) points.push({ts: ts * 1000, price: parseFloat(price)});
+    }
+  }
+  if (!points.length) { _showPopoverNoData(popover); return; }
+
+  // Sort chronologically
+  points.sort((a, b) => a.ts - b.ts);
+
+  // Deduplicate to keep the chart readable (take one point per week)
+  const weekly = [];
+  let lastWeek = -1;
+  for (const p of points) {
+    const week = Math.floor(p.ts / (7 * 86400 * 1000));
+    if (week !== lastWeek) { weekly.push(p); lastWeek = week; }
+  }
+
+  const histLow = Math.min(...weekly.map(p => p.price));
+  const labels  = weekly.map(p => new Date(p.ts).toLocaleDateString(undefined, {year:'2-digit', month:'short'}));
+  const prices  = weekly.map(p => p.price);
+
+  const bodyEl = document.getElementById('pop-body');
+  bodyEl.innerHTML = '<canvas id="pop-canvas" width="280" height="110" style="display:block;"></canvas>';
+  const canvas = document.getElementById('pop-canvas');
+
+  if (_priceChartInstance) { _priceChartInstance.destroy(); _priceChartInstance = null; }
+
+  _priceChartInstance = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: prices,
+        borderColor: '#7c6aff',
+        backgroundColor: 'rgba(124,106,255,0.1)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+      }],
+    },
+    options: {
+      responsive: false,
+      animation: false,
+      plugins: { legend: {display: false}, tooltip: {
+        callbacks: {
+          label: ctx => `$${ctx.parsed.y.toFixed(2)}`,
+        },
+        titleFont: {size: 10},
+        bodyFont: {size: 10},
+      }},
+      scales: {
+        x: { display: false },
+        y: {
+          ticks: {
+            color: '#94a3b8', font: {size: 9},
+            callback: v => `$${v.toFixed(0)}`,
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+
+  const footerEl = document.getElementById('pop-footer');
+  footerEl.innerHTML = `
+    <span class="pop-low">All-time low: $${histLow.toFixed(2)}</span>
+    <a href="https://isthereanydeal.com/game/${encodeURIComponent(gameId)}/history/" target="_blank" rel="noopener noreferrer">Full history ↗</a>
+  `;
+  _positionPopover(popover, document.querySelector(`.game-name-hover[data-name="${CSS.escape(name)}"]`) || popover);
+}
+
+// ── Recommendation History ──────────────────────────────────────────────────────
+async function _saveRecommendationHistory(mode, prefs, output) {
+  try {
+    await fetch('/api/recommendations/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode, preferences: prefs, output, timestamp: new Date().toISOString()}),
+    });
+    _loadRecommendationHistory();
+  } catch(e) {}
+}
+
+async function _loadRecommendationHistory() {
+  try {
+    const data = await apiFetch('/api/recommendations/history');
+    const history = (data.history || []).reverse();  // newest first
+    _renderHistory(history);
+  } catch(e) {}
+}
+
+let _expandedHistIdx = null;
+
+function _renderHistory(history) {
+  const section = document.getElementById('history-section');
+  const listEl  = document.getElementById('history-list');
+  if (!history.length) {
+    section.classList.remove('has-items');
+    listEl.innerHTML = '';
+    return;
+  }
+  section.classList.add('has-items');
+
+  listEl.innerHTML = history.map((h, i) => {
+    const ts = h.timestamp ? new Date(h.timestamp).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+    }) : '';
+    const preview = h.output ? h.output.replace(/[#*`]/g, '').substring(0, 120) + '…' : '';
+    const prefsText = h.preferences ? `"${escHtml(h.preferences.substring(0, 60))}"` : '';
+    const isOpen = _expandedHistIdx === i;
+    return `
+      <div class="history-item" onclick="_toggleHistoryItem(${i})">
+        <div class="hist-meta">
+          <span class="hist-mode">${escHtml(h.mode || 'library')}</span>
+          ${prefsText ? `<span class="hist-prefs">${prefsText}</span>` : ''}
+          <span class="hist-time">${escHtml(ts)}</span>
+        </div>
+        <div class="hist-preview">${escHtml(preview)}</div>
+        <div class="history-output${isOpen ? ' visible' : ''}" id="hist-output-${i}"></div>
+      </div>`;
+  }).join('');
+
+  // Render markdown for expanded items
+  history.forEach((h, i) => {
+    if (_expandedHistIdx === i) {
+      const el = document.getElementById(`hist-output-${i}`);
+      if (el) el.innerHTML = DOMPurify.sanitize(marked.parse(h.output || ''));
+    }
+  });
+
+  // Store history for toggle access
+  listEl._history = history;
+}
+
+function _toggleHistoryItem(idx) {
+  const listEl = document.getElementById('history-list');
+  const history = listEl._history || [];
+  if (_expandedHistIdx === idx) {
+    _expandedHistIdx = null;
+  } else {
+    _expandedHistIdx = idx;
+  }
+  _renderHistory(history);
 }
 
 // ── Genre Bubble Chart ──────────────────────────────────────────────────────────

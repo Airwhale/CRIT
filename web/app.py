@@ -304,11 +304,24 @@ async def get_status(session_id: str | None = Cookie(default=None)):
     """
     _, session = _get_session(session_id)
     steam_creds = session.get("steam")
+    epic_creds  = session.get("epic")
+    gog_creds   = session.get("gog")
     return {
         "steam":             bool(steam_creds),
         "steam_has_api_key": bool(steam_creds and (steam_creds.get("api_key") or os.environ.get("STEAM_API_KEY"))),
-        "epic":              "epic" in session,
-        "gog":               "gog"  in session,
+        "steam_user_id":     steam_creds.get("user_id") if steam_creds else None,
+        "epic":              bool(epic_creds),
+        "epic_tokens":       {
+            "access_token":  epic_creds.get("access_token"),
+            "refresh_token": epic_creds.get("refresh_token"),
+            "account_id":    epic_creds.get("account_id"),
+        } if epic_creds else None,
+        "gog":               bool(gog_creds),
+        "gog_tokens":        {
+            "access_token":  gog_creds.get("access_token"),
+            "refresh_token": gog_creds.get("refresh_token"),
+            "user_id":       gog_creds.get("user_id"),
+        } if gog_creds else None,
     }
 
 
@@ -892,6 +905,7 @@ async def recommend(
                 {
                     "name":     g.name,
                     "store":    g.store,
+                    "app_id":   g.app_id,
                     "discount": g.discount_percent,
                     "sale":     g.sale_price,
                     "original": g.original_price,
@@ -901,6 +915,19 @@ async def recommend(
                 for g in sale_games
             ]
             yield f'data: {json.dumps({"deals": deals_payload})}\n\n'
+
+            # Enrich deals with ITAD historical lows (non-blocking, non-fatal)
+            itad_key = os.environ.get("ITAD_API_KEY")
+            if itad_key:
+                yield status("Looking up price history on IsThereAnyDeal…")
+                try:
+                    itad_data = await asyncio.to_thread(
+                        _enrich_deals_with_itad, sale_games, itad_key
+                    )
+                    if itad_data:
+                        yield f'data: {json.dumps({"itad_data": itad_data})}\n\n'
+                except Exception:
+                    pass  # ITAD enrichment failure is non-fatal
 
             prompt = _build_sales_prompt(games_raw, sale_games, preferences, count)
 
@@ -981,6 +1008,147 @@ def _fetch_sales(
         error_callback=lambda source, err: warnings.append(f"{source}: {err}"),
     )
     return games, warnings
+
+
+def _enrich_deals_with_itad(sale_games: list, itad_key: str) -> dict:
+    """Add ITAD historical low data to a list of sale games.
+
+    Returns a dict mapping game name → {hist_low, hist_low_store, hist_low_date,
+    verdict, slug} for use in the deals table.
+
+    The verdict field is one of:
+      "all_time_low"   — current sale price ≤ historical low
+      "near_low"       — within 10% of historical low
+      "below_regular"  — good deal but historical low was cheaper
+      "no_data"        — ITAD has no history for this game
+    """
+    from game_recommender.itad import batch_lookup_game_ids, get_overview
+    from datetime import datetime
+
+    if not sale_games:
+        return {}
+
+    # Build (title, app_id) pairs — use app_id only for Steam games
+    game_infos = [
+        (g.name, g.app_id if g.store == "Steam" else None)
+        for g in sale_games
+    ]
+
+    # Step 1: Parallel ITAD ID lookup (cache makes subsequent calls instant)
+    id_map = batch_lookup_game_ids(game_infos, itad_key, max_workers=8)
+
+    name_to_id = {name: gid for name, gid in id_map.items() if gid}
+    if not name_to_id:
+        return {}
+
+    # Step 2: Batch overview for all found IDs
+    all_ids = list(name_to_id.values())
+    overview = get_overview(all_ids, itad_key)
+    if not overview:
+        return {}
+
+    # Build reverse map: itad_id → game_name
+    id_to_name = {v: k for k, v in name_to_id.items()}
+
+    # Build sale_price lookup: game_name → current sale price (as float)
+    sale_price_map: dict[str, float] = {}
+    for g in sale_games:
+        if g.sale_price_cents:
+            sale_price_map[g.name] = g.sale_price_cents / 100.0
+
+    result: dict = {}
+    for gid, item in overview.items():
+        name = id_to_name.get(gid)
+        if not name:
+            continue
+
+        lowest = item.get("lowest") or {}
+        slug = item.get("slug", "")
+
+        if not lowest:
+            result[name] = {"verdict": "no_data", "slug": slug}
+            continue
+
+        hist_price = (lowest.get("price") or {}).get("amount")
+        hist_store = (lowest.get("shop") or {}).get("name", "")
+        hist_ts = lowest.get("timestamp")
+        hist_date = None
+        if hist_ts:
+            try:
+                hist_date = datetime.fromtimestamp(hist_ts).strftime("%b %Y")
+            except Exception:
+                pass
+
+        current_sale = sale_price_map.get(name)
+
+        # Determine verdict
+        if hist_price is not None and current_sale is not None:
+            if current_sale <= hist_price * 1.01:  # within 1% (rounding)
+                verdict = "all_time_low"
+            elif current_sale <= hist_price * 1.10:  # within 10%
+                verdict = "near_low"
+            else:
+                verdict = "below_regular"
+        else:
+            verdict = "no_data"
+
+        result[name] = {
+            "hist_low":       hist_price,
+            "hist_low_store": hist_store,
+            "hist_low_date":  hist_date,
+            "verdict":        verdict,
+            "slug":           slug,
+        }
+
+    return result
+
+
+# ── Auth: Epic token restore ───────────────────────────────────────────────────
+
+@app.post("/api/auth/epic/restore")
+async def restore_epic(
+    body: dict,
+    response: Response,
+    session_id: str | None = Cookie(default=None),
+):
+    """Restore Epic session from tokens stored in browser localStorage.
+
+    Does not validate the tokens — the next library fetch will do that.
+    If the access_token is expired, the fetch helper will use refresh_token.
+    """
+    access_token = (body.get("access_token") or "").strip()
+    if not access_token:
+        raise HTTPException(400, "access_token required")
+    sid, session = _get_session(session_id)
+    session["epic"] = {
+        "access_token":  access_token,
+        "refresh_token": body.get("refresh_token"),
+        "account_id":    body.get("account_id"),
+    }
+    resp = JSONResponse({"ok": True})
+    _set_session_cookie(resp, sid)
+    return resp
+
+
+@app.post("/api/auth/gog/restore")
+async def restore_gog(
+    body: dict,
+    response: Response,
+    session_id: str | None = Cookie(default=None),
+):
+    """Restore GOG session from tokens stored in browser localStorage."""
+    access_token = (body.get("access_token") or "").strip()
+    if not access_token:
+        raise HTTPException(400, "access_token required")
+    sid, session = _get_session(session_id)
+    session["gog"] = {
+        "access_token":  access_token,
+        "refresh_token": body.get("refresh_token"),
+        "user_id":       body.get("user_id"),
+    }
+    resp = JSONResponse({"ok": True})
+    _set_session_cookie(resp, sid)
+    return resp
 
 
 # ── ITAD (IsThereAnyDeal) endpoints ──────────────────────────────────────────
