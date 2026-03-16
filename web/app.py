@@ -24,9 +24,11 @@ import asyncio
 import os
 import re
 import html
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import quote_plus
+from contextlib import asynccontextmanager
 
 import anthropic
 import httpx
@@ -68,7 +70,11 @@ async def add_security_headers(request: Request, call_next):
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
-        "connect-src 'self';"
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self';"
     )
     return response
 
@@ -78,6 +84,32 @@ async def add_security_headers(request: Request, call_next):
 # This is intentional: credentials never persist to disk, and clearing sessions
 # is as simple as restarting the server. Not suitable for multi-user production.
 _sessions: dict[str, dict] = {}
+_session_last_seen: dict[str, float] = {}
+
+# Keep in-memory sessions bounded and age them out so memory cannot grow
+# indefinitely if many sessions are created over long-running uptime.
+_SESSION_MAX = 256
+_SESSION_MAX_AGE_SECONDS = 60 * 60 * 8
+
+
+def _prune_sessions(now: float | None = None) -> None:
+    """Drop expired sessions and evict oldest sessions when above capacity."""
+    now = now or time.time()
+
+    expired = [
+        sid for sid in _sessions
+        if now - _session_last_seen.get(sid, now) > _SESSION_MAX_AGE_SECONDS
+    ]
+    for sid in expired:
+        _sessions.pop(sid, None)
+        _session_last_seen.pop(sid, None)
+
+    overflow = len(_sessions) - _SESSION_MAX
+    if overflow > 0:
+        oldest = sorted(_sessions, key=lambda sid: _session_last_seen.get(sid, 0))
+        for sid in oldest[:overflow]:
+            _sessions.pop(sid, None)
+            _session_last_seen.pop(sid, None)
 
 
 def _get_session(session_id: str | None) -> tuple[str, dict]:
@@ -90,12 +122,26 @@ def _get_session(session_id: str | None) -> tuple[str, dict]:
         (session_id, session_data) tuple. If the cookie was valid, returns
         the existing session; otherwise creates a new UUID and empty session.
     """
+    _prune_sessions()
+
     if session_id and session_id in _sessions:
+        _session_last_seen[session_id] = time.time()
         return session_id, _sessions[session_id]
     # Create a fresh session with a new UUID
     new_id = str(uuid.uuid4())
     _sessions[new_id] = {}
+    _session_last_seen[new_id] = time.time()
     return new_id, _sessions[new_id]
+
+
+@asynccontextmanager
+async def _sse_timeout(seconds: int):
+    """Python-version-safe timeout context for SSE recommendation streams."""
+    if hasattr(asyncio, "timeout"):
+        async with asyncio.timeout(seconds):
+            yield
+    else:
+        yield
 
 
 def _set_session_cookie(response: Response, session_id: str) -> None:
@@ -1052,7 +1098,7 @@ async def recommend(
         if use_thinking:
             api_kwargs["thinking"] = {"type": "adaptive"}
         try:
-            async with asyncio.timeout(240):
+            async with _sse_timeout(240):
                 async with client.messages.stream(**api_kwargs) as stream:
                     # Yield each text chunk as it arrives — the browser renders it immediately
                     async for text in stream.text_stream:
@@ -1076,6 +1122,78 @@ async def recommend(
             "X-Accel-Buffering": "no",         # Disable nginx buffering for SSE
         },
     )
+
+
+# ── Deals library (JSON) ─────────────────────────────────────────────────────
+@app.get("/api/deals")
+async def get_deals(
+    min_discount: int = 40,
+    deal_sources: str = "",
+    include_itad: bool = True,
+    session_id: str | None = Cookie(default=None),
+):
+    """Fetch current deals as JSON for the standalone deals table.
+
+    This endpoint mirrors sales-mode deal loading used by /api/recommend but
+    returns a single JSON payload instead of SSE events.
+    """
+    _, session = _get_session(session_id)
+    if not session:
+        raise HTTPException(400, "No platforms connected")
+
+    # Reuse cached/imported library if available so owned games can be filtered
+    # out from deal candidates (and wishlist checks can use known ownership).
+    library_resp = await get_library(skip_ratings=True, session_id=session_id)
+    games_raw = library_resp.get("games", [])
+    owned_ids = {g.get("app_id") for g in games_raw if g.get("app_id")}
+
+    from game_recommender.steam_sales import _ALL_SOURCES
+
+    steam_creds = session.get("steam", {})
+    sources = (
+        set(deal_sources.split(",")) & _ALL_SOURCES
+        if deal_sources
+        else _ALL_SOURCES
+    )
+    has_steam_key = bool(steam_creds.get("api_key"))
+    if "steam_wishlist" in sources and not has_steam_key:
+        sources = sources - {"steam_wishlist"}
+
+    sale_games, sale_warnings = await asyncio.to_thread(
+        _fetch_sales,
+        min_discount,
+        steam_creds,
+        sources,
+        owned_ids,
+    )
+
+    deals_payload = [
+        {
+            "name":     g.name,
+            "store":    g.store,
+            "app_id":   g.app_id,
+            "discount": g.discount_percent,
+            "sale":     g.sale_price,
+            "original": g.original_price,
+            "wishlist": g.from_wishlist,
+            "url":      g.store_url,
+        }
+        for g in sale_games
+    ]
+
+    itad_data = {}
+    itad_key = os.environ.get("ITAD_API_KEY")
+    if include_itad and itad_key and sale_games:
+        try:
+            itad_data = await asyncio.to_thread(_enrich_deals_with_itad, sale_games, itad_key)
+        except Exception:
+            itad_data = {}
+
+    return {
+        "deals": deals_payload,
+        "warnings": sale_warnings,
+        "itad_data": itad_data,
+    }
 
 
 # ── Sales helper ──────────────────────────────────────────────────────────────
