@@ -1267,10 +1267,15 @@ async function loadLibrary() {
         }
 
       } else if (msg.type === 'rawg_update') {
-        // Phase 2: one RAWG result arrived — update game in allGames and the row in-place
+        // Phase 2: one RAWG result arrived — update game in allGames and the row in-place.
+        // Also update filteredGames by reference so any subsequent sort/filter re-render
+        // uses the enriched data instead of the stale unenriched object.
         const idx = allGames.findIndex(g => g.name === msg.game.name && g.platform === msg.game.platform);
         if (idx !== -1) {
+          const oldGame = allGames[idx];
           allGames[idx] = msg.game;
+          const fidx = filteredGames.indexOf(oldGame);
+          if (fidx !== -1) filteredGames[fidx] = msg.game;
           _updateGameRow(msg.game);
         }
 
@@ -1862,6 +1867,7 @@ function getRecommendations() {
 
     if (msg.deals) {
       dealsData = msg.deals;
+      _lastDealNames = new Set(dealsData.map(d => d.name));
       itadDataStore = {};
       dealsSortCol = null;
       dealsSortAsc = true;
@@ -1928,9 +1934,17 @@ function getRecommendations() {
 
 // ── Link game names in rec output to Steam search ───────────────────────────────
 function linkifyGameNames() {
+  // Build a case-insensitive set of known game names so we only linkify actual
+  // game titles, not other bolded text like "Why play it:" or "Genre:".
+  const knownNames = new Set([
+    ...allGames.map(g => g.name.toLowerCase()),
+    ...[..._lastDealNames].map(n => n.toLowerCase()),
+  ]);
+
   document.querySelectorAll('#rec-content strong').forEach(el => {
     if (el.closest('a')) return;
     const name = el.textContent.trim();
+    if (!knownNames.has(name.toLowerCase())) return;
     const a = document.createElement('a');
     a.href = `https://store.steampowered.com/search/?term=${encodeURIComponent(name)}`;
     a.target = '_blank';
@@ -1940,6 +1954,10 @@ function linkifyGameNames() {
     el.replaceWith(a);
   });
 }
+
+// Names of games in the most recent deals recommendation — populated when deals SSE arrives
+// so linkifyGameNames can match against them in sales mode.
+let _lastDealNames = new Set();
 
 // ── Price history hover chart ──────────────────────────────────────────────────
 const _itadIdCache = {};     // game name → itad_id (session cache)
