@@ -1221,46 +1221,87 @@ async function loadLibrary() {
 
   // Show load area (in case we're refreshing from the library view)
   loadArea.removeAttribute('hidden');
-  loadStatus.innerHTML = '<span class="spinner"></span> Loading your library…<br><small style="color:var(--muted);margin-top:4px;display:block;">Fetching games and RAWG ratings — large libraries (800+ games) can take several minutes. Use the limit input above to cap enrichment and speed things up.</small>';
+  loadStatus.innerHTML = '<span class="spinner"></span> Fetching your library…';
   content.setAttribute('hidden', '');
   errDiv.innerHTML = '';
 
-  try {
-    const params = `skip_ratings=${skipRatings}${rawgLimit !== null ? `&rawg_limit=${rawgLimit}` : ''}`;
-    const data = await apiFetch(`/api/library?${params}`);
-    allGames = data.games || [];
+  const params = new URLSearchParams({skip_ratings: skipRatings});
+  if (rawgLimit !== null) params.set('rawg_limit', rawgLimit);
 
-    // Reset all filter controls to a clean state so every load starts fresh.
-    document.getElementById('lib-search').value = '';
-    ['steam', 'epic', 'gog'].forEach(p => {
-      const cb = document.getElementById(`filter-${p}`);
-      if (cb) cb.checked = true;
-    });
-    _ensureTableInit();
-    filterLibrary();
+  await new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/library/stream?${params}`);
 
-    if (data.errors && data.errors.length) {
-      data.errors.forEach(e => {
-        errDiv.innerHTML += `<div class="notice error visible" style="margin-bottom:6px;">⚠ ${e.platform}: ${e.error}</div>`;
-      });
-    }
+    es.onmessage = e => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
 
-    loadArea.setAttribute('hidden', '');
-    content.removeAttribute('hidden');
-    document.getElementById('rec-section').removeAttribute('hidden');
-    document.getElementById('viz-section').removeAttribute('hidden');
-    renderLibraryInsights();
-    loadStatus.innerHTML = '';
+      if (msg.type === 'games') {
+        // Phase 1 complete: platform fetch done — show table immediately
+        allGames = msg.games || [];
 
-    // Save to disk cache for instant next load
-    fetch('/api/library/save', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({games: allGames}),
-    }).catch(() => {});
-  } catch(e) {
-    loadStatus.innerHTML = `<div class="notice error visible">Failed to load library: ${e.message}</div>`;
-  }
+        if (msg.errors && msg.errors.length) {
+          msg.errors.forEach(err => {
+            errDiv.innerHTML += `<div class="notice error visible" style="margin-bottom:6px;">⚠ ${err.platform}: ${err.error}</div>`;
+          });
+        }
+
+        // Reset filter controls to a clean state
+        document.getElementById('lib-search').value = '';
+        ['steam', 'epic', 'gog'].forEach(p => {
+          const cb = document.getElementById(`filter-${p}`);
+          if (cb) cb.checked = true;
+        });
+        _ensureTableInit();
+        filterLibrary();
+
+        loadArea.setAttribute('hidden', '');
+        content.removeAttribute('hidden');
+        document.getElementById('rec-section').removeAttribute('hidden');
+        document.getElementById('viz-section').removeAttribute('hidden');
+        renderLibraryInsights();
+
+        if (!skipRatings) {
+          // Show a subtle per-row update indicator below the count
+          document.getElementById('lib-showing').innerHTML =
+            '<span class="spinner"></span> Loading ratings…';
+        }
+
+      } else if (msg.type === 'rawg_update') {
+        // Phase 2: one RAWG result arrived — update game in allGames and the row in-place
+        const idx = allGames.findIndex(g => g.name === msg.game.name && g.platform === msg.game.platform);
+        if (idx !== -1) {
+          allGames[idx] = msg.game;
+          _updateGameRow(msg.game);
+        }
+
+      } else if (msg.type === 'done') {
+        es.close();
+        document.getElementById('lib-showing').textContent = '';
+        loadStatus.innerHTML = '';
+
+        // Save to disk cache for instant next load
+        fetch('/api/library/save', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({games: allGames}),
+        }).catch(() => {});
+
+        resolve();
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+      if (!allGames.length) {
+        // Only show error if we haven't shown anything yet
+        loadStatus.innerHTML = '<div class="notice error visible">Failed to load library. Please try again.</div>';
+      } else {
+        document.getElementById('lib-showing').textContent = '';
+        loadStatus.innerHTML = '';
+      }
+      reject(new Error('Library stream failed'));
+    };
+  }).catch(() => {}); // errors already shown in UI
 }
 
 // Close col-picker when clicking outside
@@ -1324,74 +1365,89 @@ function renderTableHead() {
   _updateSortIndicators();
 }
 
+// ── Cell renderers (module-level so _updateGameRow can reuse them) ───────────
+const _sentinel = v => v === '~'
+  ? '<span style="color:var(--border)">–</span>'
+  : '<span style="color:var(--border)">○</span>';
+
+const _cellFor = {
+  name: g => {
+    const appId = g.app_id ? ` data-appid="${escHtml(g.app_id)}"` : '';
+    return `<td><span class="game-name-hover" data-name="${escHtml(g.name)}"${appId}>${escHtml(g.name)}</span></td>`;
+  },
+  platform: g => `<td><span class="badge badge-${g.platform}">${g.platform}</span></td>`,
+  playtime: g => {
+    const h = g.playtime_minutes > 0
+      ? `<span class="playtime played">${(g.playtime_minutes/60).toFixed(1)}h</span>`
+      : `<span class="playtime">unplayed</span>`;
+    return `<td>${h}</td>`;
+  },
+  last_played: g => {
+    let v = '<span style="color:var(--border)">—</span>';
+    if (g.last_played) {
+      const ts = parseInt(g.last_played, 10);
+      const d = isNaN(ts) ? new Date(g.last_played) : new Date(ts * 1000);
+      if (!isNaN(d.getTime()))
+        v = `<span style="color:var(--muted);font-size:0.8rem;">${d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})}</span>`;
+    }
+    return `<td>${v}</td>`;
+  },
+  release_year: g => {
+    const v = (g.release_year && g.release_year !== '~')
+      ? `<span style="color:var(--muted);font-size:0.85rem;">${g.release_year}</span>`
+      : _sentinel(g.release_year);
+    return `<td>${v}</td>`;
+  },
+  rawg_rating: g => {
+    const v = g.rawg_rating
+      ? `<span class="rating-cell">★ ${g.rawg_rating.toFixed(1)}</span>`
+      : _sentinel(g.rawg_rating);
+    return `<td>${v}</td>`;
+  },
+  metacritic: g => {
+    const v = g.metacritic
+      ? `<span class="rating-cell" style="color:${g.metacritic>=80?'var(--green)':g.metacritic>=60?'var(--yellow)':'var(--red)'}">${g.metacritic}</span>`
+      : _sentinel(g.metacritic);
+    return `<td>${v}</td>`;
+  },
+  gog_rating: g => {
+    const v = (g.gog_rating && g.gog_rating !== '~')
+      ? `<span class="rating-cell">${g.gog_rating.toFixed(1)}</span>`
+      : _sentinel(g.gog_rating);
+    return `<td>${v}</td>`;
+  },
+  genres_tags: g => {
+    const txt = [...(g.genres||[]).slice(0,2), ...(g.tags||[]).slice(0,1)].join(', ');
+    return `<td style="color:var(--muted);font-size:0.78rem;">${escHtml(txt)}</td>`;
+  },
+};
+
 function renderLibraryTable(games) {
   const tbody = document.getElementById('game-table-body');
   document.getElementById('lib-count').textContent = `${games.length} games`;
 
-  // Pre-compute cell renderers for each game object
-  const sentinel = v => v === '~'
-    ? '<span style="color:var(--border)">–</span>'
-    : '<span style="color:var(--border)">○</span>';
-
-  const cellFor = {
-    name: g => {
-      const appId = g.app_id ? ` data-appid="${escHtml(g.app_id)}"` : '';
-      return `<td><span class="game-name-hover" data-name="${escHtml(g.name)}"${appId}>${escHtml(g.name)}</span></td>`;
-    },
-    platform: g => `<td><span class="badge badge-${g.platform}">${g.platform}</span></td>`,
-    playtime: g => {
-      const h = g.playtime_minutes > 0
-        ? `<span class="playtime played">${(g.playtime_minutes/60).toFixed(1)}h</span>`
-        : `<span class="playtime">unplayed</span>`;
-      return `<td>${h}</td>`;
-    },
-    last_played: g => {
-      let v = '<span style="color:var(--border)">—</span>';
-      if (g.last_played) {
-        const ts = parseInt(g.last_played, 10);
-        const d = isNaN(ts) ? new Date(g.last_played) : new Date(ts * 1000);
-        if (!isNaN(d.getTime()))
-          v = `<span style="color:var(--muted);font-size:0.8rem;">${d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})}</span>`;
-      }
-      return `<td>${v}</td>`;
-    },
-    release_year: g => {
-      const v = (g.release_year && g.release_year !== '~')
-        ? `<span style="color:var(--muted);font-size:0.85rem;">${g.release_year}</span>`
-        : sentinel(g.release_year);
-      return `<td>${v}</td>`;
-    },
-    rawg_rating: g => {
-      const v = g.rawg_rating
-        ? `<span class="rating-cell">★ ${g.rawg_rating.toFixed(1)}</span>`
-        : sentinel(g.rawg_rating);
-      return `<td>${v}</td>`;
-    },
-    metacritic: g => {
-      const v = g.metacritic
-        ? `<span class="rating-cell" style="color:${g.metacritic>=80?'var(--green)':g.metacritic>=60?'var(--yellow)':'var(--red)'}">${g.metacritic}</span>`
-        : sentinel(g.metacritic);
-      return `<td>${v}</td>`;
-    },
-    gog_rating: g => {
-      const v = (g.gog_rating && g.gog_rating !== '~')
-        ? `<span class="rating-cell">${g.gog_rating.toFixed(1)}</span>`
-        : sentinel(g.gog_rating);
-      return `<td>${v}</td>`;
-    },
-    genres_tags: g => {
-      const txt = [...(g.genres||[]).slice(0,2), ...(g.tags||[]).slice(0,1)].join(', ');
-      return `<td style="color:var(--muted);font-size:0.78rem;">${escHtml(txt)}</td>`;
-    },
-  };
-
   const visCols = COLUMNS.filter(c => visibleCols.has(c.key));
-  tbody.innerHTML = games.map(g =>
-    `<tr>${visCols.map(c => cellFor[c.key](g)).join('')}</tr>`
-  ).join('');
+  tbody.innerHTML = games.map(g => {
+    const key = escHtml(`${g.platform}|${g.name}`);
+    return `<tr data-game-key="${key}">${visCols.map(c => _cellFor[c.key](g)).join('')}</tr>`;
+  }).join('');
   document.getElementById('lib-showing').textContent = '';
   // Attach ITAD price-history hover handlers to the freshly rendered rows
   setTimeout(_attachPriceHoverHandlers, 0);
+}
+
+// Update a single row in-place after RAWG enrichment arrives for that game.
+function _updateGameRow(game) {
+  const key = `${game.platform}|${game.name}`;
+  const tbody = document.getElementById('game-table-body');
+  if (!tbody) return;
+  // Use dataset property (HTML-entity-decoded) to avoid CSS escaping issues
+  const row = Array.from(tbody.rows).find(r => r.dataset.gameKey === key);
+  if (!row) return;
+  const visCols = COLUMNS.filter(c => visibleCols.has(c.key));
+  row.innerHTML = visCols.map(c => _cellFor[c.key](game)).join('');
+  // Re-attach hover handlers for the freshly rendered name cell
+  _attachPriceHoverHandlers();
 }
 
 function filterLibrary() {

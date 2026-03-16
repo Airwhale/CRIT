@@ -606,6 +606,99 @@ async def get_library(
     return {"games": all_games, "errors": errors}
 
 
+@app.get("/api/library/stream")
+async def stream_library(
+    skip_ratings: bool = False,
+    rawg_limit: int | None = None,
+    session_id: str | None = Cookie(default=None),
+):
+    """Stream library loading via SSE, showing games immediately then enriching with RAWG.
+
+    Event sequence:
+      1. {"type": "games",       "games": [...], "errors": [...]}  — all games, unenriched
+      2. {"type": "rawg_update", "game": {...}}                    — one per enriched game (out of order)
+      3. {"type": "done"}
+
+    This lets the UI render the table as soon as platform fetch completes, then
+    update individual rows in-place as RAWG data arrives for each game.
+    """
+    _, session = _get_session(session_id)
+
+    has_platforms = any(k in session for k in ("steam", "epic", "gog"))
+    if not has_platforms:
+        if "library" in session:
+            async def _cached_stream():
+                yield f'data: {json.dumps({"type": "games", "games": session["library"], "errors": []})}\n\n'
+                yield f'data: {json.dumps({"type": "done"})}\n\n'
+            return StreamingResponse(_cached_stream(), media_type="text/event-stream")
+        raise HTTPException(400, "No platforms connected. Connect at least one platform first.")
+
+    async def event_stream():
+        # ── Phase 1: fetch all platforms concurrently ──────────────────────────
+        fetch_tasks = {}
+        if "steam" in session:
+            fetch_tasks["steam"] = asyncio.to_thread(_fetch_steam, session["steam"])
+        if "epic" in session:
+            fetch_tasks["epic"] = asyncio.to_thread(_fetch_epic, session["epic"])
+        if "gog" in session:
+            fetch_tasks["gog"] = asyncio.to_thread(_fetch_gog, session["gog"])
+
+        results = await asyncio.gather(*fetch_tasks.values(), return_exceptions=True)
+
+        all_games: list[dict] = []
+        errors: list[dict] = []
+        for platform, result in zip(fetch_tasks.keys(), results):
+            if isinstance(result, Exception):
+                errors.append({"platform": platform, "error": str(result)})
+            else:
+                all_games.extend(result)
+
+        all_games.sort(key=lambda g: (-g["playtime_minutes"], g["name"].lower()))
+
+        # Immediately yield all games (unenriched) so the UI can render the table
+        yield f'data: {json.dumps({"type": "games", "games": all_games, "errors": errors})}\n\n'
+
+        # ── Phase 2: RAWG enrichment — stream one update per game ─────────────
+        rawg_key = os.environ.get("RAWG_API_KEY")
+        if not skip_ratings and rawg_key and all_games:
+            from game_recommender.ratings import get_game_rating
+
+            to_enrich = all_games[:rawg_limit] if rawg_limit is not None else all_games
+            sem = asyncio.Semaphore(5)
+
+            async def _enrich_one(game: dict) -> dict:
+                async with sem:
+                    try:
+                        rating = await asyncio.to_thread(get_game_rating, game["name"], rawg_key)
+                    except Exception:
+                        return game
+                    if not rating:
+                        return game
+                    cur_year = game.get("release_year")
+                    if rating.released and cur_year in (None, "~"):
+                        new_year = int(rating.released[:4])
+                    elif cur_year == "~" and not rating.released:
+                        new_year = None
+                    else:
+                        new_year = cur_year
+                    return {**game,
+                        "rawg_rating":  rating.rawg_rating,
+                        "metacritic":   rating.metacritic_score,
+                        "genres":       [_fix_mojibake(g) for g in rating.genres],
+                        "tags":         [_fix_mojibake(t) for t in (rating.tags or [])],
+                        "release_year": new_year,
+                    }
+
+            tasks = [asyncio.create_task(_enrich_one(g)) for g in to_enrich]
+            for fut in asyncio.as_completed(tasks):
+                enriched = await fut
+                yield f'data: {json.dumps({"type": "rawg_update", "game": enriched})}\n\n'
+
+        yield f'data: {json.dumps({"type": "done"})}\n\n'
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.post("/api/library/cache")
 async def cache_library(
     body: dict,
