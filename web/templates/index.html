@@ -1867,7 +1867,7 @@ function getRecommendations() {
 
     if (msg.deals) {
       dealsData = msg.deals;
-      _lastDealNames = new Set(dealsData.map(d => d.name));
+      _lastDealUrls = new Map(dealsData.map(d => [d.name.toLowerCase(), d.url || null]));
       itadDataStore = {};
       dealsSortCol = null;
       dealsSortAsc = true;
@@ -1936,17 +1936,23 @@ function getRecommendations() {
 function linkifyGameNames() {
   // Build a case-insensitive set of known game names so we only linkify actual
   // game titles, not other bolded text like "Why play it:" or "Genre:".
-  const knownNames = new Set([
-    ...allGames.map(g => g.name.toLowerCase()),
-    ...[..._lastDealNames].map(n => n.toLowerCase()),
-  ]);
+  const libraryNames = new Set(allGames.map(g => g.name.toLowerCase()));
+  const knownNames   = new Set([...libraryNames, ..._lastDealUrls.keys()]);
 
   document.querySelectorAll('#rec-content strong').forEach(el => {
     if (el.closest('a')) return;
     const name = el.textContent.trim();
-    if (!knownNames.has(name.toLowerCase())) return;
+    const key  = name.toLowerCase();
+    if (!knownNames.has(key)) return;
+
+    // Sales mode: link directly to the deal page; all other modes: Steam search.
+    const dealUrl = _lastDealUrls.get(key);
+    const href = dealUrl
+      ? dealUrl
+      : `https://store.steampowered.com/search/?term=${encodeURIComponent(name)}`;
+
     const a = document.createElement('a');
-    a.href = `https://store.steampowered.com/search/?term=${encodeURIComponent(name)}`;
+    a.href = href;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     a.style.cssText = 'color:inherit;text-decoration:underline dotted;';
@@ -1955,9 +1961,9 @@ function linkifyGameNames() {
   });
 }
 
-// Names of games in the most recent deals recommendation — populated when deals SSE arrives
-// so linkifyGameNames can match against them in sales mode.
-let _lastDealNames = new Set();
+// Map of lowercased game name → direct deal URL for the most recent sales recommendation.
+// Populated when deals SSE arrives so linkifyGameNames can link directly to the sale page.
+let _lastDealUrls = new Map();
 
 // ── Price history hover chart ──────────────────────────────────────────────────
 const _itadIdCache = {};     // game name → itad_id (session cache)
