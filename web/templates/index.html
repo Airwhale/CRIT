@@ -335,9 +335,9 @@
   #rec-output hr { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
 
   /* ── Deals collapsible table ── */
-  #deals-table-wrap { margin-bottom: 1rem; }
-  #deals-table-wrap details { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  #deals-table-wrap summary {
+  :is(#deals-table-wrap, #deals-library-wrap) { margin-bottom: 1rem; }
+  :is(#deals-table-wrap, #deals-library-wrap) details { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  :is(#deals-table-wrap, #deals-library-wrap) summary {
     padding: 0.5rem 0.85rem;
     background: var(--bg2);
     cursor: pointer;
@@ -349,16 +349,38 @@
     align-items: center;
     gap: 0.5rem;
   }
-  #deals-table-wrap summary::-webkit-details-marker { display: none; }
-  #deals-table-wrap summary .toggle-arrow { font-size: 0.65rem; transition: transform 0.15s; }
-  #deals-table-wrap details[open] summary .toggle-arrow { transform: rotate(90deg); }
-  #deals-table-wrap .deals-scroll { overflow-x: auto; }
-  #deals-table-wrap table {
+  :is(#deals-table-wrap, #deals-library-wrap) summary::-webkit-details-marker { display: none; }
+  :is(#deals-table-wrap, #deals-library-wrap) summary .toggle-arrow { font-size: 0.65rem; transition: transform 0.15s; }
+  :is(#deals-table-wrap, #deals-library-wrap) details[open] summary .toggle-arrow { transform: rotate(90deg); }
+  :is(#deals-table-wrap, #deals-library-wrap) .deals-scroll { overflow-x: auto; }
+  :is(#deals-table-wrap, #deals-library-wrap) .deals-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,0.01);
+  }
+  :is(#deals-table-wrap, #deals-library-wrap) .deals-search {
+    max-width: 240px;
+    font-size: 0.78rem;
+    padding: 0.35rem 0.55rem;
+  }
+  :is(#deals-table-wrap, #deals-library-wrap) .deals-count {
+    margin-left: auto;
+    font-size: 0.74rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  :is(#deals-table-wrap, #deals-library-wrap) table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.78rem;
   }
-  #deals-table-wrap th {
+  :is(#deals-table-wrap, #deals-library-wrap) tbody tr:nth-child(even) td {
+    background: rgba(255,255,255,0.015);
+  }
+  :is(#deals-table-wrap, #deals-library-wrap) th {
     background: var(--bg2);
     color: var(--muted);
     font-weight: 600;
@@ -367,24 +389,46 @@
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
   }
-  #deals-table-wrap td {
+  :is(#deals-table-wrap, #deals-library-wrap) td {
     padding: 0.3rem 0.6rem;
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
   }
-  #deals-table-wrap tr:last-child td { border-bottom: none; }
-  #deals-table-wrap tr:hover td { background: var(--bg2); }
-  #deals-table-wrap .col-discount { color: var(--accent2); font-weight: 700; text-align: right; }
-  #deals-table-wrap .col-sale    { font-weight: 600; }
-  #deals-table-wrap .col-orig    { color: var(--muted); text-decoration: line-through; }
-  #deals-table-wrap .wishlist-star { color: gold; }
-  #deals-table-wrap .col-link { text-align: right; white-space: nowrap; }
-  #deals-table-wrap .buy-link { font-size: 0.8rem; color: var(--accent2); text-decoration: none; opacity: 0.75; }
-  #deals-table-wrap .buy-link:hover { opacity: 1; text-decoration: underline; }
-  #deals-table-wrap th.sortable { cursor: pointer; user-select: none; }
-  #deals-table-wrap th.sortable:hover { color: var(--fg, #eee); background: var(--bg3, #2a2a3a); }
-  #deals-table-wrap th.sort-asc::after  { content: ' ↑'; opacity: 0.7; }
-  #deals-table-wrap th.sort-desc::after { content: ' ↓'; opacity: 0.7; }
+  :is(#deals-table-wrap, #deals-library-wrap) tr:last-child td { border-bottom: none; }
+  :is(#deals-table-wrap, #deals-library-wrap) tr:hover td { background: var(--bg2); }
+  :is(#deals-table-wrap, #deals-library-wrap) .col-discount { color: var(--accent2); font-weight: 700; text-align: right; }
+  :is(#deals-table-wrap, #deals-library-wrap) .col-sale    { font-weight: 600; }
+  :is(#deals-table-wrap, #deals-library-wrap) .col-orig    { color: var(--muted); text-decoration: line-through; }
+  :is(#deals-table-wrap, #deals-library-wrap) .col-itad {
+    white-space: normal;
+    min-width: 130px;
+    line-height: 1.25;
+  }
+  :is(#deals-table-wrap, #deals-library-wrap) .wishlist-star { color: gold; }
+  :is(#deals-table-wrap, #deals-library-wrap) .col-link { text-align: right; white-space: nowrap; }
+  :is(#deals-table-wrap, #deals-library-wrap) .buy-link { font-size: 0.8rem; color: var(--accent2); text-decoration: none; opacity: 0.75; }
+  :is(#deals-table-wrap, #deals-library-wrap) .buy-link:hover { opacity: 1; text-decoration: underline; }
+  :is(#deals-table-wrap, #deals-library-wrap) th.sortable { cursor: pointer; user-select: none; }
+  :is(#deals-table-wrap, #deals-library-wrap) th.sortable:hover { color: var(--fg, #eee); background: var(--bg3, #2a2a3a); }
+  :is(#deals-table-wrap, #deals-library-wrap) th.sort-asc::after  { content: ' ↑'; opacity: 0.7; }
+  :is(#deals-table-wrap, #deals-library-wrap) th.sort-desc::after { content: ' ↓'; opacity: 0.7; }
+  :is(#deals-table-wrap, #deals-library-wrap) th:nth-child(2),
+  :is(#deals-table-wrap, #deals-library-wrap) td:nth-child(2) {
+    position: sticky;
+    left: 28px;
+    z-index: 2;
+    background: var(--bg2);
+  }
+  :is(#deals-table-wrap, #deals-library-wrap) th:first-child,
+  :is(#deals-table-wrap, #deals-library-wrap) td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background: var(--bg2);
+    width: 28px;
+    min-width: 28px;
+    max-width: 28px;
+  }
 
   /* ── Mode tabs ── */
   .mode-tabs {
@@ -819,11 +863,62 @@
     </div>
   </div><!-- step 2 card -->
 
-
-  <!-- ── Step 3: Recommendations ── -->
-  <div class="card" id="rec-section" hidden>
+  <div class="card" id="deals-library-section" hidden>
     <div class="section-header">
       <span class="step-num">3</span>
+      <h2>Deals Library</h2>
+    </div>
+    <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem;">
+      Load a standalone table of current deals first, then optionally run a Deals recommendation.
+    </p>
+    <div class="mode-opts" style="margin-bottom:0.75rem;">
+      <label>
+        Min discount:
+        <input type="range" id="dl-min-discount" min="10" max="80" step="10" value="40"
+               oninput="document.getElementById('dl-min-discount-val').textContent = this.value + '%'">
+        <span class="opt-val" id="dl-min-discount-val">40%</span>
+      </label>
+      <div style="margin-top:0.4rem;">
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.35rem;">Sources:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-steam-featured" checked> Steam Featured
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-steam-wishlist" checked> Steam Wishlist
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-gog" checked> GOG
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-humble" checked> Humble Store
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-fanatical" checked> Fanatical
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-gmg" checked> Green Man Gaming
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-epic-deals" checked> Epic (deals)
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.82rem;">
+            <input type="checkbox" id="dl-src-epic-free" checked> Epic Free Games
+          </label>
+        </div>
+      </div>
+    </div>
+    <button class="load-library-btn" id="load-deals-btn" onclick="loadDealsLibrary()">Load Deals Table</button>
+    <div id="deals-library-status" style="margin-top:0.75rem;"></div>
+    <div id="deals-library-warnings"></div>
+    <div id="deals-library-wrap" hidden></div>
+  </div>
+
+
+  <!-- ── Step 4: Recommendations ── -->
+  <div class="card" id="rec-section" hidden>
+    <div class="section-header">
+      <span class="step-num">4</span>
       <h2>Get Recommendations</h2>
     </div>
 
@@ -918,7 +1013,10 @@
 
     <div id="rec-output">
       <div id="rec-status-line" class="rec-status" hidden></div>
+      <div id="rec-warning-line"></div>
+      <div id="rec-deals-title" style="display:none;font-size:0.78rem;color:var(--muted);margin:0.4rem 0 0.55rem 0;text-transform:uppercase;letter-spacing:0.04em;">Deal candidates fetched</div>
       <div id="deals-table-wrap" hidden></div>
+      <div id="rec-picks-title" style="display:none;font-size:0.78rem;color:var(--muted);margin:0.25rem 0 0.45rem 0;text-transform:uppercase;letter-spacing:0.04em;">Claude picks</div>
       <div id="rec-content"></div>
       <div id="rec-itad-card" hidden></div>
       <span class="streaming-cursor" id="rec-cursor" hidden></span>
@@ -982,7 +1080,18 @@ let _priceChartInstance = null;  // singleton Chart.js instance
 
   try {
     const status = await apiFetch('/api/status');
-    if (status.steam) markConnected('steam', status.steam_has_api_key);
+    if (status.steam) {
+      // Persist Steam restore data even when connection came from OpenID redirect
+      // (or server-side session) so future server restarts can auto-restore.
+      const existingSteam = _lsGet('crit_steam') || {};
+      if (status.steam_user_id) {
+        _lsSet('crit_steam', {
+          ...existingSteam,
+          user_id: status.steam_user_id,
+        });
+      }
+      markConnected('steam', status.steam_has_api_key);
+    }
     if (status.epic)  markConnected('epic');
     if (status.gog)   markConnected('gog');
 
@@ -1053,6 +1162,7 @@ async function _tryLoadFromDiskCache() {
       filterLibrary();
       document.getElementById('library-content').removeAttribute('hidden');
       document.getElementById('library-load-area').setAttribute('hidden', '');
+      document.getElementById('deals-library-section').removeAttribute('hidden');
       document.getElementById('rec-section').removeAttribute('hidden');
       document.getElementById('viz-section').removeAttribute('hidden');
       renderLibraryInsights();
@@ -1276,6 +1386,7 @@ async function loadLibrary() {
 
         loadArea.setAttribute('hidden', '');
         content.removeAttribute('hidden');
+        document.getElementById('deals-library-section').removeAttribute('hidden');
         document.getElementById('rec-section').removeAttribute('hidden');
         document.getElementById('viz-section').removeAttribute('hidden');
         renderLibraryInsights();
@@ -1595,6 +1706,7 @@ function importCSV(input) {
       _ensureTableInit();
       filterLibrary();
       document.getElementById('library-content').removeAttribute('hidden');
+      document.getElementById('deals-library-section').removeAttribute('hidden');
       document.getElementById('rec-section').removeAttribute('hidden');
       document.getElementById('viz-section').removeAttribute('hidden');
       renderLibraryInsights();
@@ -1701,76 +1813,101 @@ function setMode(mode) {
 }
 
 // ── Recommendations ────────────────────────────────────────────────────────────
-function getRecommendations() {
-  const prefs       = encodeURIComponent(document.getElementById('preferences').value.trim());
-  const count       = parseInt(document.getElementById('rec-count').value) || 5;
-  const minDiscount = parseInt(document.getElementById('min-discount').value) || 40;
+function _selectedDealSources(prefix = 'src-') {
   const srcMap = {
-    'steam_featured': 'src-steam-featured',
-    'steam_wishlist': 'src-steam-wishlist',
-    'gog':            'src-gog',
-    'humble':         'src-humble',
-    'fanatical':      'src-fanatical',
-    'gmg':            'src-gmg',
-    'epic_deals':     'src-epic-deals',
-    'epic_free':      'src-epic-free',
+    'steam_featured': `${prefix}steam-featured`,
+    'steam_wishlist': `${prefix}steam-wishlist`,
+    'gog':            `${prefix}gog`,
+    'humble':         `${prefix}humble`,
+    'fanatical':      `${prefix}fanatical`,
+    'gmg':            `${prefix}gmg`,
+    'epic_deals':     `${prefix}epic-deals`,
+    'epic_free':      `${prefix}epic-free`,
   };
-  const dealSources = Object.entries(srcMap)
+  return Object.entries(srcMap)
     .filter(([, id]) => document.getElementById(id)?.checked)
     .map(([key]) => key)
     .join(',');
-  const maxNewMin   = parseInt(document.getElementById('max-new-minutes').value) || 60;
-  const model       = document.getElementById('rec-model')?.value || 'claude-sonnet-4-6';
-  const useThinking = document.getElementById('rec-thinking')?.checked || false;
+}
 
-  const output     = document.getElementById('rec-output');
-  const content    = document.getElementById('rec-content');
-  const cursor     = document.getElementById('rec-cursor');
-  const statusLine = document.getElementById('rec-status-line');
-  const btn        = document.getElementById('rec-btn');
+function _parseDealPrice(str) {
+  const n = parseFloat((str || '').replace(/[^0-9.]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
 
-  const dealsWrap = document.getElementById('deals-table-wrap');
-  let dealsData = [];
+function _itadCell(d, itadDataStore) {
+  const itad = itadDataStore[d.name];
+  if (!itad || itad.verdict === 'no_data' || !itad.hist_low) {
+    return itad ? '' : '<span style="color:var(--border);font-size:0.72rem;">…</span>';
+  }
+  const price = `$${itad.hist_low.toFixed(2)}`;
+  const date  = itad.hist_low_date ? ` ${itad.hist_low_date}` : '';
+  const store = itad.hist_low_store ? ` on ${escHtml(itad.hist_low_store)}` : '';
+  const itadUrl = itad.slug ? `https://isthereanydeal.com/game/${escHtml(itad.slug)}/history/` : '';
+  const link = itadUrl ? `<a href="${itadUrl}" target="_blank" rel="noopener noreferrer" title="View full history on ITAD" style="color:var(--muted);font-size:0.65rem;margin-left:3px;">↗</a>` : '';
+
+  if (itad.verdict === 'all_time_low') {
+    return `<span class="itad-badge all-time-low" title="All-time low!${store}${date}">🟢 All-time low!</span>${link}`;
+  } else if (itad.verdict === 'near_low') {
+    return `<span class="itad-badge near-low" title="Near historical low${store}${date}">${price} low</span>${link}`;
+  } else {
+    return `<span class="itad-badge below-reg" title="Historical low: ${price}${store}${date}">low: ${price}</span>${link}`;
+  }
+}
+
+function renderDealsTableIn(wrap, dealsData, itadDataStore = {}, title = null) {
   let dealsSortCol = null;
   let dealsSortAsc = true;
+  let dealsSearch = '';
 
-  function parsePrice(str) {
-    const n = parseFloat((str || '').replace(/[^0-9.]/g, ''));
-    return isNaN(n) ? 0 : n;
-  }
+  const dealCount = dealsData.length;
+  const summary = title || `${dealCount} deal${dealCount !== 1 ? 's' : ''} found — click to browse`;
+  wrap.innerHTML = `
+    <details>
+      <summary>
+        <span class="toggle-arrow">▶</span>
+        ${summary}
+      </summary>
+      <div class="deals-toolbar">
+        <input class="deals-search" type="search" placeholder="Search deals by title or store…">
+        <span class="deals-count"></span>
+      </div>
+      <div class="deals-scroll">
+        <table>
+          <thead><tr>
+            <th></th>
+            <th class="sortable" data-col="name">Name</th>
+            <th class="sortable" data-col="store">Store</th>
+            <th class="sortable" data-col="discount">Discount</th>
+            <th class="sortable" data-col="sale">Sale Price</th>
+            <th class="sortable" data-col="original">Original</th>
+            <th id="itad-col-header" style="white-space:nowrap;color:var(--muted);font-size:0.73rem;">Hist. Low</th>
+            <th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>`;
 
-  function _itadCell(d) {
-    const itad = itadDataStore[d.name];
-    if (!itad || itad.verdict === 'no_data' || !itad.hist_low) {
-      return itad ? '' : '<span style="color:var(--border);font-size:0.72rem;">…</span>';
-    }
-    const price = `$${itad.hist_low.toFixed(2)}`;
-    const date  = itad.hist_low_date ? ` ${itad.hist_low_date}` : '';
-    const store = itad.hist_low_store ? ` on ${escHtml(itad.hist_low_store)}` : '';
-    const itadUrl = itad.slug ? `https://isthereanydeal.com/game/${escHtml(itad.slug)}/history/` : '';
-    const link = itadUrl ? `<a href="${itadUrl}" target="_blank" rel="noopener noreferrer" title="View full history on ITAD" style="color:var(--muted);font-size:0.65rem;margin-left:3px;">↗</a>` : '';
+  function renderRows() {
+    const filtered = dealsData.filter(d => {
+      if (!dealsSearch) return true;
+      const q = dealsSearch.toLowerCase();
+      return (d.name || '').toLowerCase().includes(q) || (d.store || '').toLowerCase().includes(q);
+    });
 
-    if (itad.verdict === 'all_time_low') {
-      return `<span class="itad-badge all-time-low" title="All-time low!${store}${date}">🟢 All-time low!</span>${link}`;
-    } else if (itad.verdict === 'near_low') {
-      return `<span class="itad-badge near-low" title="Near historical low${store}${date}">${price} low</span>${link}`;
-    } else {
-      return `<span class="itad-badge below-reg" title="Historical low: ${price}${store}${date}">low: ${price}</span>${link}`;
-    }
-  }
-
-  function renderDealsTable() {
-    const sorted = [...dealsData].sort((a, b) => {
+    const sorted = [...filtered].sort((a, b) => {
       if (!dealsSortCol) return 0;
       let va, vb;
       if (dealsSortCol === 'discount') { va = a.discount; vb = b.discount; }
-      else if (dealsSortCol === 'sale')     { va = parsePrice(a.sale);     vb = parsePrice(b.sale); }
-      else if (dealsSortCol === 'original') { va = parsePrice(a.original); vb = parsePrice(b.original); }
+      else if (dealsSortCol === 'sale')     { va = _parseDealPrice(a.sale);     vb = _parseDealPrice(b.sale); }
+      else if (dealsSortCol === 'original') { va = _parseDealPrice(a.original); vb = _parseDealPrice(b.original); }
       else { va = (a[dealsSortCol] || '').toLowerCase(); vb = (b[dealsSortCol] || '').toLowerCase(); }
       if (va < vb) return dealsSortAsc ? -1 : 1;
       if (va > vb) return dealsSortAsc ?  1 : -1;
       return 0;
     });
+
     const rows = sorted.map(d => {
       const link = d.url
         ? `<a class="buy-link" href="${escHtml(d.url)}" target="_blank" rel="noopener noreferrer">Buy →</a>`
@@ -1783,19 +1920,103 @@ function getRecommendations() {
         <td class="col-discount">${d.discount}%</td>
         <td class="col-sale">${escHtml(d.sale)}</td>
         <td class="col-orig">${escHtml(d.original)}</td>
-        <td>${_itadCell(d)}</td>
+        <td class="col-itad">${_itadCell(d, itadDataStore)}</td>
         <td class="col-link">${link}</td>
       </tr>`;
     }).join('');
-    const tbody = dealsWrap.querySelector('tbody');
+    const tbody = wrap.querySelector('tbody');
     if (tbody) tbody.innerHTML = rows;
-    dealsWrap.querySelectorAll('th.sortable').forEach(th => {
+    const countEl = wrap.querySelector('.deals-count');
+    if (countEl) countEl.textContent = `Showing ${filtered.length}/${dealsData.length} deals`;
+    wrap.querySelectorAll('th.sortable').forEach(th => {
       th.classList.remove('sort-asc', 'sort-desc');
-      if (th.dataset.col === dealsSortCol) {
-        th.classList.add(dealsSortAsc ? 'sort-asc' : 'sort-desc');
-      }
+      if (th.dataset.col === dealsSortCol) th.classList.add(dealsSortAsc ? 'sort-asc' : 'sort-desc');
     });
   }
+
+  wrap.querySelectorAll('th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      if (dealsSortCol === th.dataset.col) dealsSortAsc = !dealsSortAsc;
+      else {
+        dealsSortCol = th.dataset.col;
+        dealsSortAsc = dealsSortCol !== 'discount';
+      }
+      renderRows();
+    });
+  });
+  const searchInput = wrap.querySelector('.deals-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      dealsSearch = searchInput.value.trim();
+      renderRows();
+    });
+  }
+  renderRows();
+  wrap.hidden = false;
+}
+
+async function loadDealsLibrary() {
+  const btn = document.getElementById('load-deals-btn');
+  const status = document.getElementById('deals-library-status');
+  const warnings = document.getElementById('deals-library-warnings');
+  const wrap = document.getElementById('deals-library-wrap');
+  const minDiscount = parseInt(document.getElementById('dl-min-discount').value) || 40;
+  const dealSources = _selectedDealSources('dl-src-');
+
+  btn.disabled = true;
+  status.innerHTML = '<span class="spinner"></span> Fetching deals…';
+  warnings.innerHTML = '';
+  wrap.hidden = true;
+  wrap.innerHTML = '';
+  try {
+    const params = new URLSearchParams({min_discount: minDiscount, deal_sources: dealSources, include_itad: 'true'});
+    const data = await apiFetch(`/api/deals?${params}`);
+    const deals = data.deals || [];
+    if (data.warnings && data.warnings.length) {
+      warnings.innerHTML = data.warnings.map(w =>
+        `<div class="notice info visible" style="margin-bottom:4px;">⚠ ${escHtml(w)}</div>`
+      ).join('');
+    }
+    if (!deals.length) {
+      status.innerHTML = `
+        <div class="notice info visible">
+          No deals found at this discount threshold.
+          <div style="margin-top:6px;display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.75rem;padding:0.3rem 0.6rem;" onclick="document.getElementById('dl-min-discount').value=30;document.getElementById('dl-min-discount-val').textContent='30%';loadDealsLibrary()">Try 30% discount</button>
+            <button style="background:var(--bg3);color:var(--muted);border:1px solid var(--border);font-size:0.75rem;padding:0.3rem 0.6rem;" onclick="document.querySelectorAll('[id^=\"dl-src-\"]').forEach(cb=>cb.checked=true);loadDealsLibrary()">Enable all sources</button>
+          </div>
+        </div>`;
+      return;
+    }
+    status.innerHTML = '';
+    renderDealsTableIn(wrap, deals, data.itad_data || {}, `${deals.length} deal${deals.length !== 1 ? 's' : ''} in your deals library — click to browse`);
+  } catch (e) {
+    status.innerHTML = `<div class="notice error visible">Failed to load deals: ${escHtml(e.message || String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function getRecommendations() {
+  const prefs       = encodeURIComponent(document.getElementById('preferences').value.trim());
+  const count       = parseInt(document.getElementById('rec-count').value) || 5;
+  const minDiscount = parseInt(document.getElementById('min-discount').value) || 40;
+  const dealSources = _selectedDealSources();
+  const maxNewMin   = parseInt(document.getElementById('max-new-minutes').value) || 60;
+  const model       = document.getElementById('rec-model')?.value || 'claude-sonnet-4-6';
+  const useThinking = document.getElementById('rec-thinking')?.checked || false;
+
+  const output     = document.getElementById('rec-output');
+  const content    = document.getElementById('rec-content');
+  const cursor     = document.getElementById('rec-cursor');
+  const statusLine = document.getElementById('rec-status-line');
+  const warningLine = document.getElementById('rec-warning-line');
+  const recDealsTitle = document.getElementById('rec-deals-title');
+  const recPicksTitle = document.getElementById('rec-picks-title');
+  const btn        = document.getElementById('rec-btn');
+
+  const dealsWrap = document.getElementById('deals-table-wrap');
+  let dealsData = [];
 
   output.classList.add('visible');
   content.innerHTML = '';
@@ -1805,10 +2026,11 @@ function getRecommendations() {
   itadCard.hidden = true;
   itadCard.innerHTML = '';
   dealsData = [];
-  dealsSortCol = null;
-  dealsSortAsc = true;
   statusLine.hidden = true;
   statusLine.innerHTML = '';
+  warningLine.innerHTML = '';
+  recDealsTitle.style.display = 'none';
+  recPicksTitle.style.display = 'none';
   cursor.removeAttribute('hidden');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Working…';
@@ -1865,27 +2087,16 @@ function getRecommendations() {
     }
 
     if (msg.warnings) {
-      // Show yellow warning notices for deal sources that failed
-      const warnHtml = msg.warnings.map(w =>
+      warningLine.innerHTML = msg.warnings.map(w =>
         `<div class="notice info visible" style="margin-bottom:4px;">⚠ ${escHtml(w)}</div>`
       ).join('');
-      if (warnHtml) {
-        const existing = dealsWrap.querySelector('.deal-warnings');
-        if (existing) existing.innerHTML = warnHtml;
-        else {
-          const div = document.createElement('div');
-          div.className = 'deal-warnings';
-          div.innerHTML = warnHtml;
-          dealsWrap.before(div);
-        }
-      }
       return;
     }
 
     if (msg.itad_data) {
       itadDataStore = msg.itad_data;
       // Re-render deals table with historical low column if it exists
-      if (dealsData.length) renderDealsTable();
+      if (dealsData.length) renderDealsTableIn(dealsWrap, dealsData, itadDataStore);
       return;
     }
 
@@ -1893,50 +2104,15 @@ function getRecommendations() {
       dealsData = msg.deals;
       _lastDealUrls = new Map(dealsData.map(d => [d.name.toLowerCase(), d.url || null]));
       itadDataStore = {};
-      dealsSortCol = null;
-      dealsSortAsc = true;
-      const dealCount = dealsData.length;
-      dealsWrap.innerHTML = `
-        <details>
-          <summary>
-            <span class="toggle-arrow">▶</span>
-            ${dealCount} deal${dealCount !== 1 ? 's' : ''} found — click to browse
-          </summary>
-          <div class="deals-scroll">
-            <table>
-              <thead><tr>
-                <th></th>
-                <th class="sortable" data-col="name">Name</th>
-                <th class="sortable" data-col="store">Store</th>
-                <th class="sortable" data-col="discount">Discount</th>
-                <th class="sortable" data-col="sale">Sale Price</th>
-                <th class="sortable" data-col="original">Original</th>
-                <th id="itad-col-header" style="white-space:nowrap;color:var(--muted);font-size:0.73rem;">Hist. Low</th>
-                <th></th>
-              </tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </details>`;
-      dealsWrap.querySelectorAll('th.sortable').forEach(th => {
-        th.addEventListener('click', () => {
-          if (dealsSortCol === th.dataset.col) {
-            dealsSortAsc = !dealsSortAsc;
-          } else {
-            dealsSortCol = th.dataset.col;
-            dealsSortAsc = dealsSortCol === 'discount' ? false : true;
-          }
-          renderDealsTable();
-        });
-      });
-      renderDealsTable();
-      dealsWrap.hidden = false;
+      recDealsTitle.style.display = 'block';
+      renderDealsTableIn(dealsWrap, dealsData, itadDataStore);
       return;
     }
 
     if (msg.text) {
       // First text chunk — hide status line, show content
       if (!rawText) statusLine.hidden = true;
+      recPicksTitle.style.display = 'block';
       rawText += msg.text;
       content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
       linkifyGameNames();
@@ -1990,17 +2166,44 @@ async function _fetchItadForRec() {
   const card = document.getElementById('rec-itad-card');
   if (!card) return;
 
+  function looksLikeGameTitle(name) {
+    if (!name) return false;
+    const s = name.trim();
+    if (!s) return false;
+    // Skip common markdown label/bullet fields that are often bolded.
+    if (s.endsWith(':')) return false;
+    const lowered = s.toLowerCase();
+    // Skip free-form sentences/lists that are not likely to be titles.
+    if (s.includes('\n') || s.length > 80) return false;
+    if (s.includes(',') && s.split(',').length >= 2) return false;
+    if (/\b(this|these|those|because|great|time to|should|fits|match|quality)\b/i.test(s) && s.split(/\s+/).length > 4) return false;
+    if (/^[a-z\s\/\-]+$/.test(s) && s.split(/\s+/).length > 2) return false;
+    if (['free', 'sale', 'discount', 'wishlist'].includes(lowered)) return false;
+    const nonTitleLabels = [
+      'why it fits', 'why play this now', 'genre match', 'genres', 'ratings',
+      'best for', 'similar to', 'price', 'store', 'discount', 'status'
+    ];
+    if (nonTitleLabels.some(lbl => lowered === lbl || lowered.startsWith(lbl + ' '))) {
+      return false;
+    }
+    // In sales mode, prefer exact deal-candidate titles to avoid accidental label matches.
+    if (activeMode === 'sales' && _lastDealUrls.size) {
+      return _lastDealUrls.has(lowered);
+    }
+    return true;
+  }
+
   // Collect bolded game names that are NOT in the user's library.
   const ownedKeys = new Set(allGames.map(g => g.name.toLowerCase()));
   const unowned = [];
   document.querySelectorAll('#rec-content strong').forEach(el => {
     const name = el.textContent.trim();
-    if (name && !ownedKeys.has(name.toLowerCase())) unowned.push(name);
+    if (looksLikeGameTitle(name) && !ownedKeys.has(name.toLowerCase())) unowned.push(name);
   });
   // Also include names wrapped in <a> (already linkified).
   document.querySelectorAll('#rec-content a strong').forEach(el => {
     const name = el.textContent.trim();
-    if (name && !ownedKeys.has(name.toLowerCase())) {
+    if (looksLikeGameTitle(name) && !ownedKeys.has(name.toLowerCase())) {
       if (!unowned.some(n => n.toLowerCase() === name.toLowerCase())) unowned.push(name);
     }
   });
@@ -2035,6 +2238,8 @@ async function _fetchItadForRec() {
   const rows = unowned.map(name => {
     const d = data[name];
     if (!d) return `<div class="itad-row"><span class="itad-name">${escHtml(name)}</span><span class="itad-meta">No data</span></div>`;
+    const cur = d.current_price != null ? `$${d.current_price.toFixed(2)}` : '—';
+    const curStore = d.current_store ? ` on ${escHtml(d.current_store)}` : '';
     const low = d.hist_low != null ? `$${d.hist_low.toFixed(2)}` : '—';
     const store = d.hist_low_store ? ` on ${escHtml(d.hist_low_store)}` : '';
     const date  = d.hist_low_date  ? ` (${escHtml(d.hist_low_date)})` : '';
@@ -2043,6 +2248,7 @@ async function _fetchItadForRec() {
       : '';
     return `<div class="itad-row">` +
       `<span class="itad-name">${escHtml(name)}</span>` +
+      `<span class="itad-meta">now: ${cur}${curStore}</span>` +
       `<span class="itad-low">${low}</span>` +
       `<span class="itad-meta">hist. low${store}${date}</span>` +
       `${link}</div>`;
