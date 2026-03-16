@@ -12,6 +12,7 @@ All credentials stay in server memory and are never written to disk. Restarting 
 
 - **From Library** — recommends games you already own based on playtime patterns and genre taste
 - **Steam Deals** — scans current Steam sales (and optionally your wishlist) and picks deals that fit your history
+- **Deals Library table** — load a standalone sortable table of current deals before asking for deal recommendations
 - **Backlog** — recommends unplayed or barely-touched games already sitting in your library
 - **Discover** — recommends games you don't own yet, drawn from Claude's broad knowledge of the medium
 - Unified library table merging Steam, Epic, and GOG with sortable, toggleable columns
@@ -201,6 +202,8 @@ Choose a mode with the tab switcher:
 **Steam Deals options:**
 - **Min discount** slider — only show deals at or above this percentage (default 40%)
 - **Include my wishlist** — checks your Steam wishlist for items on sale (takes an extra ~20 seconds for up to 100 items)
+
+You can also click **Load Deals Table** to fetch a standalone deals table (with store, discount, prices, and historical-low badges when ITAD is configured) without running a recommendation yet.
 
 **Backlog options:**
 - **Count as "unplayed" if under X minutes** — games with playtime below this threshold are treated as unplayed (default 60 minutes)

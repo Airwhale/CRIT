@@ -1124,6 +1124,78 @@ async def recommend(
     )
 
 
+# ── Deals library (JSON) ─────────────────────────────────────────────────────
+@app.get("/api/deals")
+async def get_deals(
+    min_discount: int = 40,
+    deal_sources: str = "",
+    include_itad: bool = True,
+    session_id: str | None = Cookie(default=None),
+):
+    """Fetch current deals as JSON for the standalone deals table.
+
+    This endpoint mirrors sales-mode deal loading used by /api/recommend but
+    returns a single JSON payload instead of SSE events.
+    """
+    _, session = _get_session(session_id)
+    if not session:
+        raise HTTPException(400, "No platforms connected")
+
+    # Reuse cached/imported library if available so owned games can be filtered
+    # out from deal candidates (and wishlist checks can use known ownership).
+    library_resp = await get_library(skip_ratings=True, session_id=session_id)
+    games_raw = library_resp.get("games", [])
+    owned_ids = {g.get("app_id") for g in games_raw if g.get("app_id")}
+
+    from game_recommender.steam_sales import _ALL_SOURCES
+
+    steam_creds = session.get("steam", {})
+    sources = (
+        set(deal_sources.split(",")) & _ALL_SOURCES
+        if deal_sources
+        else _ALL_SOURCES
+    )
+    has_steam_key = bool(steam_creds.get("api_key"))
+    if "steam_wishlist" in sources and not has_steam_key:
+        sources = sources - {"steam_wishlist"}
+
+    sale_games, sale_warnings = await asyncio.to_thread(
+        _fetch_sales,
+        min_discount,
+        steam_creds,
+        sources,
+        owned_ids,
+    )
+
+    deals_payload = [
+        {
+            "name":     g.name,
+            "store":    g.store,
+            "app_id":   g.app_id,
+            "discount": g.discount_percent,
+            "sale":     g.sale_price,
+            "original": g.original_price,
+            "wishlist": g.from_wishlist,
+            "url":      g.store_url,
+        }
+        for g in sale_games
+    ]
+
+    itad_data = {}
+    itad_key = os.environ.get("ITAD_API_KEY")
+    if include_itad and itad_key and sale_games:
+        try:
+            itad_data = await asyncio.to_thread(_enrich_deals_with_itad, sale_games, itad_key)
+        except Exception:
+            itad_data = {}
+
+    return {
+        "deals": deals_payload,
+        "warnings": sale_warnings,
+        "itad_data": itad_data,
+    }
+
+
 # ── Sales helper ──────────────────────────────────────────────────────────────
 
 def _fetch_sales(

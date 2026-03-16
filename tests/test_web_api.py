@@ -552,6 +552,8 @@ class TestRecommend:
         events = parse_sse(resp.text)
         assert any("error" in e for e in events)
 
+
+
     def test_claude_exception_streams_error_event(self, client):
         """An exception from the Claude stream is caught and emitted as an error event."""
         session_id = "sess-claude-err"
@@ -618,6 +620,52 @@ class TestRecommend:
         events = parse_sse(resp.text)
         # Should succeed (clamped, not rejected)
         assert any(e.get("done") is True for e in events)
+
+class TestDealsEndpoint:
+    """Tests for GET /api/deals standalone deals-table endpoint."""
+
+    def test_requires_connected_session(self, client):
+        resp = client.get('/api/deals')
+        assert resp.status_code == 400
+
+    def test_returns_deals_and_warnings(self, client, monkeypatch):
+        from game_recommender.steam_sales import SaleGame
+
+        session_id = 'sess-deals-json'
+        _sessions[session_id] = {'steam': {'api_key': 'k', 'user_id': 'u'}}
+        monkeypatch.setenv('ITAD_API_KEY', 'itad-test-key')
+
+        sales = [
+            SaleGame(name='Cyberpunk 2077', app_id='1091500', discount_percent=60,
+                     original_price_cents=5999, sale_price_cents=2399),
+        ]
+        with patch('web.app._fetch_steam', return_value=FAKE_GAMES), \
+             patch('web.app._fetch_sales', return_value=(sales, ['wishlist source unavailable'])), \
+             patch('web.app._enrich_deals_with_itad', return_value={'Cyberpunk 2077': {'verdict': 'near_low', 'hist_low': 19.99}}):
+            _set_session_cookie(client, session_id)
+            resp = client.get('/api/deals?min_discount=40&deal_sources=steam_featured')
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data['deals']) == 1
+        assert data['warnings'] == ['wishlist source unavailable']
+        assert 'Cyberpunk 2077' in data['itad_data']
+
+    def test_without_itad_key_skips_itad_enrichment(self, client, monkeypatch):
+        session_id = 'sess-deals-no-itad'
+        _sessions[session_id] = {'steam': {'api_key': 'k', 'user_id': 'u'}}
+        monkeypatch.delenv('ITAD_API_KEY', raising=False)
+
+        with patch('web.app._fetch_steam', return_value=FAKE_GAMES), \
+             patch('web.app._fetch_sales', return_value=([], [])), \
+             patch('web.app._enrich_deals_with_itad') as mock_itad:
+            _set_session_cookie(client, session_id)
+            resp = client.get('/api/deals')
+
+        assert resp.status_code == 200
+        assert resp.json()['itad_data'] == {}
+        mock_itad.assert_not_called()
+
 
 
 # ── Corner cases ──────────────────────────────────────────────────────────────
