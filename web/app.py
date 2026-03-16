@@ -1418,6 +1418,61 @@ async def itad_games(request: Request):
         return {"available": True, "data": {}}
 
     id_to_name = {v: k for k, v in name_to_id.items()}
+
+    def _extract_current_price_info(item: dict) -> tuple[float | None, str | None]:
+        """Extract current/best-available price + store across ITAD response variants."""
+        # Variant A: nested under "current": {price:{amount}, shop:{name}}
+        current = item.get("current") or {}
+        price_obj = current.get("price") if isinstance(current, dict) else None
+        shop_obj = current.get("shop") if isinstance(current, dict) else None
+        amount = None
+        if isinstance(price_obj, dict):
+            amount = price_obj.get("amount")
+        elif isinstance(price_obj, (int, float)):
+            amount = price_obj
+        store = shop_obj.get("name") if isinstance(shop_obj, dict) else None
+
+        # Variant B: flat "price" / "shop" fields
+        if amount is None:
+            price_obj = item.get("price")
+            if isinstance(price_obj, dict):
+                amount = price_obj.get("amount")
+            elif isinstance(price_obj, (int, float)):
+                amount = price_obj
+        if not store:
+            shop_obj = item.get("shop")
+            if isinstance(shop_obj, dict):
+                store = shop_obj.get("name")
+
+        # Variant C: list of deals/offers; pick minimum amount
+        if amount is None:
+            candidates = item.get("deals") or item.get("offers") or []
+            best_amt, best_store = None, None
+            if isinstance(candidates, list):
+                for c in candidates:
+                    if not isinstance(c, dict):
+                        continue
+                    p = c.get("price")
+                    if isinstance(p, dict):
+                        p = p.get("amount")
+                    if p is None:
+                        continue
+                    try:
+                        p = float(p)
+                    except Exception:
+                        continue
+                    if best_amt is None or p < best_amt:
+                        best_amt = p
+                        s = c.get("shop")
+                        best_store = s.get("name") if isinstance(s, dict) else None
+                amount, store = best_amt, (best_store or store)
+
+        try:
+            amount = float(amount) if amount is not None else None
+        except Exception:
+            amount = None
+        return amount, store
+
     result: dict = {}
     for gid, item in overview.items():
         name = id_to_name.get(gid)
@@ -1437,7 +1492,10 @@ async def itad_games(request: Request):
                 hist_date = datetime.fromtimestamp(hist_ts).strftime("%b %Y")
             except Exception:
                 pass
+        current_price, current_store = _extract_current_price_info(item)
         result[name] = {
+            "current_price":  current_price,
+            "current_store":  current_store,
             "hist_low":       hist_price,
             "hist_low_store": hist_store,
             "hist_low_date":  hist_date,

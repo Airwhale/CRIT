@@ -186,7 +186,15 @@ Two optional controls are available before clicking **Load Library**:
 
 If you have previously loaded your library, it is automatically restored from cache on the next visit so you can jump straight to recommendations without waiting for a fetch.
 
-### Step 3 — Get recommendations
+### Step 3 — (Optional) Browse the Deals Library table
+
+Click **Load Deals Table** to fetch a standalone deals table (with store, discount, prices, and historical-low badges when ITAD is configured) before running recommendations.
+
+Use the Deals Library filters to control:
+- **Min discount** threshold
+- **Deal sources** (Steam Featured/Wishlist, GOG, Humble, Fanatical, GMG, Epic)
+
+### Step 4 — Get recommendations
 
 Choose a mode with the tab switcher:
 
