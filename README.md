@@ -12,6 +12,7 @@ All credentials stay in server memory and are never written to disk. Restarting 
 
 - **From Library** — recommends games you already own based on playtime patterns and genre taste
 - **Steam Deals** — scans current Steam sales (and optionally your wishlist) and picks deals that fit your history
+- **Deals Library table** — load a standalone sortable table of current deals before asking for deal recommendations
 - **Backlog** — recommends unplayed or barely-touched games already sitting in your library
 - **Discover** — recommends games you don't own yet, drawn from Claude's broad knowledge of the medium
 - Unified library table merging Steam, Epic, and GOG with sortable, toggleable columns
@@ -111,7 +112,7 @@ Choose the block for your OS, paste it all at once, then edit `.env` before the 
 ### Linux / macOS
 
 ```bash
-git clone https://github.com/Airwhale/claude/blob/claude/game-recommendation-system-FAohj
+git clone <repo-url>
 cd claude
 python3 -m venv .venv
 source .venv/bin/activate
@@ -185,7 +186,15 @@ Two optional controls are available before clicking **Load Library**:
 
 If you have previously loaded your library, it is automatically restored from cache on the next visit so you can jump straight to recommendations without waiting for a fetch.
 
-### Step 3 — Get recommendations
+### Step 3 — (Optional) Browse the Deals Library table
+
+Click **Load Deals Table** to fetch a standalone deals table (with store, discount, prices, and historical-low badges when ITAD is configured) before running recommendations.
+
+Use the Deals Library filters to control:
+- **Min discount** threshold
+- **Deal sources** (Steam Featured/Wishlist, GOG, Humble, Fanatical, GMG, Epic)
+
+### Step 4 — Get recommendations
 
 Choose a mode with the tab switcher:
 
@@ -194,6 +203,7 @@ Choose a mode with the tab switcher:
 | **From Library** | Picks games you own that suit your taste |
 | **Steam Deals** | Scans current sales and your wishlist for good buys |
 | **Backlog** | Picks unplayed games you already own to try next |
+| **Discover** | Suggests new games you don't own yet based on your taste profile |
 
 **Optional:** type a mood or preference in the text box (e.g. *"something short I can finish this weekend"* or *"a relaxing game with no time pressure"*).
 
