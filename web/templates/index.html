@@ -352,10 +352,7 @@
   :is(#deals-table-wrap, #deals-library-wrap) summary::-webkit-details-marker { display: none; }
   :is(#deals-table-wrap, #deals-library-wrap) summary .toggle-arrow { font-size: 0.65rem; transition: transform 0.15s; }
   :is(#deals-table-wrap, #deals-library-wrap) details[open] summary .toggle-arrow { transform: rotate(90deg); }
-  :is(#deals-table-wrap, #deals-library-wrap) .deals-scroll {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
+  :is(#deals-table-wrap, #deals-library-wrap) .deals-scroll { overflow-x: auto; }
   :is(#deals-table-wrap, #deals-library-wrap) .deals-toolbar {
     display: flex;
     align-items: center;
@@ -1098,7 +1095,6 @@ let _priceChartInstance = null;  // singleton Chart.js instance
         _lsSet('crit_steam', {
           ...existingSteam,
           user_id: status.steam_user_id,
-          api_key: status.steam_api_key || existingSteam.api_key || null,
         });
       }
       markConnected('steam', status.steam_has_api_key);
