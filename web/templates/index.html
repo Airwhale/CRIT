@@ -396,6 +396,7 @@
   }
   :is(#deals-table-wrap, #deals-library-wrap) tr:last-child td { border-bottom: none; }
   :is(#deals-table-wrap, #deals-library-wrap) tr:hover td { background: var(--bg2); }
+  :is(#deals-table-wrap, #deals-library-wrap) .col-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :is(#deals-table-wrap, #deals-library-wrap) .col-discount { color: var(--accent2); font-weight: 700; text-align: right; }
   :is(#deals-table-wrap, #deals-library-wrap) .col-sale    { font-weight: 600; }
   :is(#deals-table-wrap, #deals-library-wrap) .col-orig    { color: var(--muted); text-decoration: line-through; }
@@ -1917,7 +1918,7 @@ function renderDealsTableIn(wrap, dealsData, itadDataStore = {}, title = null) {
       return `
       <tr>
         <td>${d.wishlist ? '<span class="wishlist-star" title="On your wishlist">★</span>' : ''}</td>
-        <td>${d.url ? `<a href="${escHtml(d.url)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline dotted;">${escHtml(d.name)}</a>` : escHtml(d.name)}</td>
+        <td class="col-name" title="${escHtml(d.name)}">${d.url ? `<a href="${escHtml(d.url)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline dotted;">${escHtml(d.name)}</a>` : escHtml(d.name)}</td>
         <td>${escHtml(d.store)}</td>
         <td class="col-discount">${d.discount}%</td>
         <td class="col-sale">${escHtml(d.sale)}</td>
