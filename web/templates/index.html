@@ -1859,12 +1859,17 @@ function _itadCell(d, itadDataStore) {
 }
 
 function renderCandidatesTableIn(wrap, candidates) {
-  const total = candidates.length;
+  const total    = candidates.length;
+  const onSale   = candidates.filter(c => c.deal).length;
+  const summary  = onSale
+    ? `${total} backlog candidates — <span style="color:#4caf50">${onSale} on sale now</span>`
+    : `${total} backlog candidate${total !== 1 ? 's' : ''} — click to browse`;
+
   wrap.innerHTML = `
     <details>
       <summary>
         <span class="toggle-arrow">▶</span>
-        ${total} backlog candidate${total !== 1 ? 's' : ''} — click to browse
+        ${summary}
       </summary>
       <div class="deals-toolbar">
         <input class="deals-search" type="search" placeholder="Search by title…">
@@ -1875,18 +1880,25 @@ function renderCandidatesTableIn(wrap, candidates) {
           <thead><tr>
             <th>Name</th>
             <th>Platform</th>
+            <th>Current Deal</th>
             <th>Playtime</th>
             <th>Rating</th>
           </tr></thead>
           <tbody>
             ${candidates.map(c => {
-              const pt = c.playtime_min
+              const pt     = c.playtime_min
                 ? (c.playtime_min < 60 ? `${c.playtime_min}m` : `${(c.playtime_min / 60).toFixed(1)}h`)
                 : 'Unplayed';
               const rating = c.rating ? `${c.rating.toFixed(1)}/5` : '—';
-              return `<tr>
+              const deal   = c.deal;
+              const dealCell = deal
+                ? `<td style="color:#4caf50;white-space:nowrap">${deal.discount}% off → ${escHtml(deal.sale)}</td>`
+                : `<td style="color:var(--muted)">—</td>`;
+              const rowStyle = deal ? ' style="background:rgba(76,175,80,0.07)"' : '';
+              return `<tr${rowStyle}>
                 <td class="col-name" title="${escHtml(c.name)}">${escHtml(c.name)}</td>
                 <td style="color:var(--muted)">${escHtml(c.platform)}</td>
+                ${dealCell}
                 <td style="color:var(--muted)">${pt}</td>
                 <td style="color:var(--muted)">${rating}</td>
               </tr>`;

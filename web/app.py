@@ -1020,40 +1020,42 @@ async def recommend(
                 yield status("Fetching deals…")
 
             try:
-                sale_games, sale_warnings = await asyncio.to_thread(
+                # Fetch broadly (no threshold, no owned filter) so the full deal
+                # library can be cached and shared with Backlog mode.
+                all_deals, sale_warnings = await asyncio.to_thread(
                     _fetch_sales,
-                    min_discount,
+                    1,           # effectively no threshold — keeps genuinely free items out
                     steam_creds,
                     sources,
-                    owned_ids,
+                    set(),       # don't exclude owned games from the raw feed
                 )
             except Exception as e:
                 yield f'data: {json.dumps({"error": f"Sales fetch failed: {e}"})}\n\n'
                 return
 
+            # Persist the full feed so Backlog mode can cross-reference it
+            session["deals_cache"] = {
+                "ts":    time.time(),
+                "deals": [_deal_to_dict(g) for g in all_deals],
+            }
+
             # Surface warnings for any deal sources that failed
             if sale_warnings:
                 yield f'data: {json.dumps({"warnings": sale_warnings})}\n\n'
 
+            # Apply the user's threshold and exclude already-owned games for the
+            # actual recommendation (owned games are interesting for the cache but
+            # not for "what should I buy").
+            sale_games = [
+                g for g in all_deals
+                if g.discount_percent >= min_discount and g.app_id not in owned_ids
+            ]
             if not sale_games:
                 yield f'data: {json.dumps({"error": "No sales found above the discount threshold. Try lowering it."})}\n\n'
                 return
 
-            # Emit the raw deals list so the frontend can render a table
-            deals_payload = [
-                {
-                    "name":     g.name,
-                    "store":    g.store,
-                    "app_id":   g.app_id,
-                    "discount": g.discount_percent,
-                    "sale":     g.sale_price,
-                    "original": g.original_price,
-                    "wishlist": g.from_wishlist,
-                    "url":      g.store_url,
-                }
-                for g in sale_games
-            ]
-            yield f'data: {json.dumps({"deals": deals_payload})}\n\n'
+            # Emit the filtered deal list so the frontend can render a table
+            yield f'data: {json.dumps({"deals": [_deal_to_dict(g) for g in sale_games]})}\n\n'
 
             # Enrich deals with ITAD historical lows (non-blocking, non-fatal)
             itad_key = os.environ.get("ITAD_API_KEY")
@@ -1078,19 +1080,55 @@ async def recommend(
                 yield f'data: {json.dumps({"error": "No unplayed games found in your library."})}\n\n'
                 return
 
-            # Emit the candidate list so the frontend can show a backlog table
+            # ── Pull deal library (populate from mode 2's cache if available) ───
+            deals_cache = session.get("deals_cache", {})
+            cache_age   = time.time() - deals_cache.get("ts", 0)
+            if not deals_cache.get("deals") or cache_age > 3600:
+                # Cache is empty or stale — fetch deals now so we can annotate
+                yield status("Fetching deal prices for your backlog…")
+                from game_recommender.steam_sales import _ALL_SOURCES
+                steam_creds_new = session.get("steam", {})
+                has_key_new     = bool(steam_creds_new.get("api_key"))
+                bg_sources      = _ALL_SOURCES - ({"steam_wishlist"} if not has_key_new else set())
+                try:
+                    bg_deals, _ = await asyncio.to_thread(
+                        _fetch_sales, 1, steam_creds_new, bg_sources, set()
+                    )
+                    session["deals_cache"] = {
+                        "ts":    time.time(),
+                        "deals": [_deal_to_dict(g) for g in bg_deals],
+                    }
+                except Exception:
+                    session["deals_cache"] = {"ts": time.time(), "deals": []}
+
+            # Build lookup dicts: prefer app_id match, fall back to name
+            cached_deals = session["deals_cache"].get("deals", [])
+            by_app_id = {d["app_id"]: d for d in cached_deals if d.get("app_id")}
+            by_name   = {d["name"].lower(): d for d in cached_deals}
+
+            # Annotate each unplayed game with its current deal (if any)
+            def _annotate(g: dict) -> dict:
+                deal = by_app_id.get(g.get("app_id")) or by_name.get(g["name"].lower())
+                return {**g, "deal": deal} if deal else g
+
+            annotated = [_annotate(g) for g in unplayed]
+            # Sort: on-sale games first (time-sensitive), then by name
+            annotated.sort(key=lambda g: (g.get("deal") is None, g["name"].lower()))
+
+            # Emit the enriched candidate list for the frontend table
             candidates_payload = [
                 {
                     "name":        g["name"],
                     "platform":    g["platform"].upper(),
                     "playtime_min": g["playtime_minutes"],
                     "rating":      g.get("rawg_rating"),
+                    "deal":        g.get("deal"),
                 }
-                for g in unplayed
+                for g in annotated
             ]
             yield f'data: {json.dumps({"candidates": candidates_payload})}\n\n'
 
-            prompt = _build_new_game_prompt(games_raw, unplayed, preferences, count)
+            prompt = _build_new_game_prompt(games_raw, annotated, preferences, count)
 
         elif mode == "discover":
             prompt = _build_discover_prompt(games_raw, preferences, count)
@@ -1236,6 +1274,20 @@ def _fetch_sales(
         error_callback=lambda source, err: warnings.append(f"{source}: {err}"),
     )
     return games, warnings
+
+
+def _deal_to_dict(g) -> dict:
+    """Serialize a SaleGame object to a plain dict suitable for session caching."""
+    return {
+        "name":     g.name,
+        "store":    g.store,
+        "app_id":   g.app_id,
+        "discount": g.discount_percent,
+        "sale":     g.sale_price,
+        "original": g.original_price,
+        "wishlist": g.from_wishlist,
+        "url":      g.store_url,
+    }
 
 
 def _enrich_deals_with_itad(sale_games: list, itad_key: str) -> dict:
@@ -1713,12 +1765,19 @@ def _build_new_game_prompt(
         mins = g["playtime_minutes"]
         # Show minutes (not hours) for low-playtime games so "5 min" reads naturally
         playtime = f"{mins}min" if mins else "0 min"
-        line = f"- {g['name']} ({g['platform'].upper()}) | {playtime}"
+        deal = g.get("deal")
+        if deal:
+            tag  = "⭐ WISHLIST + ON SALE" if deal.get("wishlist") else "🔥 ON SALE"
+            line = f"{tag}: {g['name']} ({g['platform'].upper()}) | {deal['discount']}% OFF → {deal['sale']} (was {deal['original']}) | {playtime}"
+        else:
+            line = f"- {g['name']} ({g['platform'].upper()}) | {playtime}"
         if g.get("rawg_rating"):
             line += f" | RAWG {g['rawg_rating']:.1f}/5"
         if g.get("genres"):
             line += f" | {', '.join(g['genres'][:3])}"
         return line
+
+    has_deals = any(g.get("deal") for g in unplayed)
 
     # Only games with >60 minutes played are a meaningful taste signal
     played = [g for g in games if g["playtime_minutes"] > 60]
@@ -1743,6 +1802,12 @@ def _build_new_game_prompt(
             "the one they'd least expect to love but probably will."
         )
 
+    deal_note = (
+        " Games marked 🔥 ON SALE or ⭐ WISHLIST + ON SALE are currently discounted — "
+        "factor in the deal when ranking (a great match that's also on sale now is ideal)."
+        if has_deals else ""
+    )
+
     cached = (
         f"You are a gaming advisor helping a player explore their backlog.\n\n"
         f"**GAMES THEY'VE PLAYED (their taste profile):**\n{played_lines}"
@@ -1750,7 +1815,7 @@ def _build_new_game_prompt(
     rest = (
         f"{prefs_section}\n\n"
         f"**UNPLAYED GAMES IN THEIR LIBRARY:**\n{unplayed_lines}\n\n"
-        f"Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.\n\n"
+        f"Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.{deal_note}\n\n"
         f"{format_instructions}\n\nOnly recommend games from the unplayed list above."
     )
     return cached, rest
