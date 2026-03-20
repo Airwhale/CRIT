@@ -1858,6 +1858,109 @@ function _itadCell(d, itadDataStore) {
   }
 }
 
+function renderCandidatesTableIn(wrap, candidates) {
+  const total = candidates.length;
+  wrap.innerHTML = `
+    <details>
+      <summary>
+        <span class="toggle-arrow">▶</span>
+        ${total} backlog candidate${total !== 1 ? 's' : ''} — click to browse
+      </summary>
+      <div class="deals-toolbar">
+        <input class="deals-search" type="search" placeholder="Search by title…">
+        <span class="deals-count">Showing ${total}/${total}</span>
+      </div>
+      <div class="deals-scroll">
+        <table>
+          <thead><tr>
+            <th>Name</th>
+            <th>Platform</th>
+            <th>Playtime</th>
+            <th>Rating</th>
+          </tr></thead>
+          <tbody>
+            ${candidates.map(c => {
+              const pt = c.playtime_min
+                ? (c.playtime_min < 60 ? `${c.playtime_min}m` : `${(c.playtime_min / 60).toFixed(1)}h`)
+                : 'Unplayed';
+              const rating = c.rating ? `${c.rating.toFixed(1)}/5` : '—';
+              return `<tr>
+                <td class="col-name" title="${escHtml(c.name)}">${escHtml(c.name)}</td>
+                <td style="color:var(--muted)">${escHtml(c.platform)}</td>
+                <td style="color:var(--muted)">${pt}</td>
+                <td style="color:var(--muted)">${rating}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </details>`;
+
+  const searchInput = wrap.querySelector('.deals-search');
+  const countEl     = wrap.querySelector('.deals-count');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.toLowerCase();
+      let shown = 0;
+      wrap.querySelectorAll('tbody tr').forEach(tr => {
+        const match = !q || tr.querySelector('td').textContent.toLowerCase().includes(q);
+        tr.style.display = match ? '' : 'none';
+        if (match) shown++;
+      });
+      if (countEl) countEl.textContent = `Showing ${shown}/${total}`;
+    });
+  }
+}
+
+function buildDiscoverPicksTable() {
+  // After streaming, extract bold store-linked game names from the rendered output
+  // Claude outputs **[Game Name](store_url)** which becomes <strong><a href="...">Name</a></strong>
+  const recContent = document.getElementById('rec-content');
+  if (!recContent) return;
+
+  const seen = new Set();
+  const picks = [];
+  recContent.querySelectorAll('strong a[href], a[href] > strong').forEach(el => {
+    const a    = el.tagName === 'A' ? el : el.closest('a');
+    const name = (el.tagName === 'A' ? el : el).textContent.trim();
+    if (!a || !name || seen.has(name.toLowerCase())) return;
+    seen.add(name.toLowerCase());
+    picks.push({ name, url: a.href });
+  });
+  if (!picks.length) return;
+
+  const recDealsTitle = document.getElementById('rec-deals-title');
+  const dealsWrap     = document.getElementById('deals-table-wrap');
+  recDealsTitle.textContent = 'Recommended games';
+  recDealsTitle.style.display = 'block';
+  dealsWrap.hidden = false;
+  dealsWrap.innerHTML = `
+    <details open>
+      <summary>
+        <span class="toggle-arrow">▶</span>
+        ${picks.length} game${picks.length !== 1 ? 's' : ''} recommended
+      </summary>
+      <div class="deals-scroll">
+        <table>
+          <thead><tr>
+            <th style="width:2em">#</th>
+            <th>Name</th>
+            <th></th>
+          </tr></thead>
+          <tbody>
+            ${picks.map((p, i) => `
+              <tr>
+                <td style="color:var(--muted);text-align:right">${i + 1}</td>
+                <td class="col-name" title="${escHtml(p.name)}">${escHtml(p.name)}</td>
+                <td class="col-link"><a class="buy-link" href="${escHtml(p.url)}" target="_blank" rel="noopener noreferrer">View →</a></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </details>`;
+}
+
 function renderDealsTableIn(wrap, dealsData, itadDataStore = {}, title = null) {
   let dealsSortCol = null;
   let dealsSortAsc = true;
@@ -2064,6 +2167,7 @@ function getRecommendations() {
       btn.innerHTML = '✨ Recommend';
       content.innerHTML = DOMPurify.sanitize(marked.parse(rawText));
       linkifyGameNames();
+      if (activeMode === 'discover') buildDiscoverPicksTable();
       _fetchItadForRec();
       // Save to recommendation history
       if (rawText) {
@@ -2103,10 +2207,19 @@ function getRecommendations() {
       return;
     }
 
+    if (msg.candidates) {
+      recDealsTitle.textContent = 'Backlog candidates';
+      recDealsTitle.style.display = 'block';
+      dealsWrap.hidden = false;
+      renderCandidatesTableIn(dealsWrap, msg.candidates);
+      return;
+    }
+
     if (msg.deals) {
       dealsData = msg.deals;
       _lastDealUrls = new Map(dealsData.map(d => [d.name.toLowerCase(), d.url || null]));
       itadDataStore = {};
+      recDealsTitle.textContent = 'Deal candidates fetched';
       recDealsTitle.style.display = 'block';
       renderDealsTableIn(dealsWrap, dealsData, itadDataStore);
       return;

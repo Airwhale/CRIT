@@ -1077,6 +1077,19 @@ async def recommend(
             if not unplayed:
                 yield f'data: {json.dumps({"error": "No unplayed games found in your library."})}\n\n'
                 return
+
+            # Emit the candidate list so the frontend can show a backlog table
+            candidates_payload = [
+                {
+                    "name":        g["name"],
+                    "platform":    g["platform"].upper(),
+                    "playtime_min": g["playtime_minutes"],
+                    "rating":      g.get("rawg_rating"),
+                }
+                for g in unplayed
+            ]
+            yield f'data: {json.dumps({"candidates": candidates_payload})}\n\n'
+
             prompt = _build_new_game_prompt(games_raw, unplayed, preferences, count)
 
         elif mode == "discover":
@@ -1090,10 +1103,14 @@ async def recommend(
 
         # Use AsyncAnthropic so the streaming doesn't block the event loop
         client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+        cached_text, rest_text = prompt
         api_kwargs = {
             "model": model,
             "max_tokens": 4096,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": cached_text, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": rest_text},
+            ]}],
         }
         if use_thinking:
             api_kwargs["thinking"] = {"type": "adaptive"}
@@ -1594,7 +1611,7 @@ async def get_recommendation_history():
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
-def _build_library_prompt(games: list[dict], preferences: str, count: int) -> str:
+def _build_library_prompt(games: list[dict], preferences: str, count: int) -> tuple[str, str]:
     """Build a prompt asking Claude to pick games from the user's owned library."""
     return _build_prompt(games, preferences, count)
 
@@ -1604,7 +1621,7 @@ def _build_sales_prompt(
     sale_games: list,
     preferences: str,
     count: int,
-) -> str:
+) -> tuple[str, str]:
     """Build a prompt asking Claude to find the best current Steam deals for this player.
 
     The prompt includes two sections:
@@ -1655,20 +1672,19 @@ def _build_sales_prompt(
             '"wait for a better deal" situation.'
         )
 
-    return f"""You are a gaming deal advisor. Your job is to identify which current game deals best match a player's taste.
-
-**PLAYER'S LIBRARY (taste profile):**
-{library_lines}
-{prefs_section}
-
-**CURRENT DEALS (not yet owned, across multiple stores):**
-{sale_lines}
-
-From the deals listed above, recommend exactly {count} games this player should buy. Include the store name in each recommendation so the player knows where to get it. Wishlist items are already ones they want \u2014 prioritise them if they match.
-
-{format_instructions}
-
-Only recommend games from the deals list above."""
+    cached = (
+        f"You are a gaming deal advisor. Your job is to identify which current game deals best match a player's taste.\n\n"
+        f"**PLAYER'S LIBRARY (taste profile):**\n{library_lines}"
+    )
+    rest = (
+        f"{prefs_section}\n\n"
+        f"**CURRENT DEALS (not yet owned, across multiple stores):**\n{sale_lines}\n\n"
+        f"From the deals listed above, recommend exactly {count} games this player should buy. "
+        f"Include the store name in each recommendation so the player knows where to get it. "
+        f"Wishlist items are already ones they want \u2014 prioritise them if they match.\n\n"
+        f"{format_instructions}\n\nOnly recommend games from the deals list above."
+    )
+    return cached, rest
 
 
 def _build_new_game_prompt(
@@ -1676,7 +1692,7 @@ def _build_new_game_prompt(
     unplayed: list[dict],
     preferences: str,
     count: int,
-) -> str:
+) -> tuple[str, str]:
     """Build a prompt asking Claude to suggest unplayed games from the user's backlog.
 
     The prompt includes:
@@ -1727,23 +1743,20 @@ def _build_new_game_prompt(
             "the one they'd least expect to love but probably will."
         )
 
-    return f"""You are a gaming advisor helping a player explore their backlog.
-
-**GAMES THEY'VE PLAYED (their taste profile):**
-{played_lines}
-{prefs_section}
-
-**UNPLAYED GAMES IN THEIR LIBRARY:**
-{unplayed_lines}
-
-Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.
-
-{format_instructions}
-
-Only recommend games from the unplayed list above."""
+    cached = (
+        f"You are a gaming advisor helping a player explore their backlog.\n\n"
+        f"**GAMES THEY'VE PLAYED (their taste profile):**\n{played_lines}"
+    )
+    rest = (
+        f"{prefs_section}\n\n"
+        f"**UNPLAYED GAMES IN THEIR LIBRARY:**\n{unplayed_lines}\n\n"
+        f"Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.\n\n"
+        f"{format_instructions}\n\nOnly recommend games from the unplayed list above."
+    )
+    return cached, rest
 
 
-def _build_prompt(games: list[dict], preferences: str, count: int) -> str:
+def _build_prompt(games: list[dict], preferences: str, count: int) -> tuple[str, str]:
     """Build the default library recommendation prompt.
 
     Formats all games with playtime and any available rating data,
@@ -1787,20 +1800,21 @@ No other commentary. Just the numbered list."""
 
 End with a 2-3 sentence insight about patterns in their gaming taste."""
 
-    return f"""You are a knowledgeable gaming advisor helping a player decide what to play next from their existing library.
+    cached = (
+        f"You are a knowledgeable gaming advisor helping a player decide what to play next from their existing library.\n\n"
+        f"Here is the player's game library with playtime and ratings:\n\n"
+        f"{chr(10).join(lines)}\n\n"
+        f"**Library stats:** {len(games)} total | {played} played | {unplayed} unplayed"
+    )
+    rest = (
+        f"{prefs_section}\n\n"
+        f"{format_instructions}\n\n"
+        f"Be specific and grounded in their actual library. Only recommend games listed above."
+    )
+    return cached, rest
 
-Here is the player's game library with playtime and ratings:
 
-{chr(10).join(lines)}
-
-**Library stats:** {len(games)} total | {played} played | {unplayed} unplayed{prefs_section}
-
-{format_instructions}
-
-Be specific and grounded in their actual library. Only recommend games listed above."""
-
-
-def _build_discover_prompt(games: list[dict], preferences: str, count: int) -> str:
+def _build_discover_prompt(games: list[dict], preferences: str, count: int) -> tuple[str, str]:
     """Build a prompt asking Claude to recommend any games the player doesn't own.
 
     The player's library is used purely as a taste profile — Claude is free to
@@ -1838,15 +1852,18 @@ Replace "Game Name" and "Game+Name" in each link with the actual title. For Epic
 
 End with a one-sentence note on the common thread running through your picks."""
 
-    return f"""You are a gaming advisor with encyclopedic knowledge of games across all platforms and eras.
-
-**PLAYER'S TASTE PROFILE (games they already own — DO NOT recommend any of these):**
-{chr(10).join(lines)}
-{prefs_section}
-
-**COMPLETE LIST OF OWNED GAMES (every title below is already owned — never recommend these):**
-{owned_names}
-
-Based on this player's demonstrated taste, recommend exactly {count} games they do not own. Draw on your full knowledge of games across Steam, Epic, GOG, consoles, and any platform. Every game you recommend must be absent from the owned list above.
-
-{format_instructions}"""
+    cached = (
+        f"You are a gaming advisor with encyclopedic knowledge of games across all platforms and eras.\n\n"
+        f"**PLAYER'S TASTE PROFILE (games they already own — DO NOT recommend any of these):**\n"
+        f"{chr(10).join(lines)}\n\n"
+        f"**COMPLETE LIST OF OWNED GAMES (every title below is already owned — never recommend these):**\n"
+        f"{owned_names}"
+    )
+    rest = (
+        f"{prefs_section}\n\n"
+        f"Based on this player's demonstrated taste, recommend exactly {count} games they do not own. "
+        f"Draw on your full knowledge of games across Steam, Epic, GOG, consoles, and any platform. "
+        f"Every game you recommend must be absent from the owned list above.\n\n"
+        f"{format_instructions}"
+    )
+    return cached, rest
