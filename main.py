@@ -310,3 +310,9 @@ def _print_library_table(games, max_rows: int = 50):
 
 if __name__ == "__main__":
     main()
+
+
+# Re-export the ASGI app so `uvicorn main:app` works for deployment.
+# The CLI entry point above is unaffected — Click only executes when
+# this file is run directly, not when it's imported by uvicorn.
+from web.app import app  # noqa: E402, F401
