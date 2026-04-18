@@ -1001,54 +1001,48 @@ async def recommend(
 
         if mode == "sales":
             from game_recommender.steam_sales import _ALL_SOURCES
-            steam_creds = session.get("steam", {})
-            owned_ids = {g["app_id"] for g in games_raw if g.get("app_id")}
+            steam_creds   = session.get("steam", {})
+            has_steam_key = bool(steam_creds.get("api_key"))
+            owned_ids     = {g["app_id"] for g in games_raw if g.get("app_id")}
 
             # Parse requested sources; default to all when none specified
-            sources = (
+            requested_sources = (
                 set(deal_sources.split(",")) & _ALL_SOURCES
                 if deal_sources
-                else _ALL_SOURCES
+                else set(_ALL_SOURCES)
             )
-            has_steam_key = bool(steam_creds.get("api_key"))
-            # Wishlist needs credentials — silently drop it if unavailable
-            if "steam_wishlist" in sources and not has_steam_key:
-                sources = sources - {"steam_wishlist"}
-            if "steam_wishlist" in sources:
+            if "steam_wishlist" in requested_sources and not has_steam_key:
+                requested_sources.discard("steam_wishlist")
+
+            # Fast path: reuse the shared deal cache (populated by this mode,
+            # backlog mode, or the standalone /api/deals endpoint).
+            cache_was_warm = bool(
+                (session.get("deals_cache") or {}).get("games")
+                and time.time() - session["deals_cache"].get("ts", 0) < DEALS_CACHE_TTL
+            )
+            if cache_was_warm:
+                yield status("Using recent deals (cached)…")
+            elif "steam_wishlist" in requested_sources:
                 yield status("Checking your Steam wishlist — up to 100 items, ~20 sec…")
             else:
                 yield status("Fetching deals…")
 
             try:
-                # Fetch broadly (no threshold, no owned filter) so the full deal
-                # library can be cached and shared with Backlog mode.
-                all_deals, sale_warnings = await asyncio.to_thread(
-                    _fetch_sales,
-                    1,           # effectively no threshold — keeps genuinely free items out
-                    steam_creds,
-                    sources,
-                    set(),       # don't exclude owned games from the raw feed
-                )
+                all_deals, sale_warnings, _ = await _get_or_fetch_deals(session)
             except Exception as e:
                 yield f'data: {json.dumps({"error": f"Sales fetch failed: {e}"})}\n\n'
                 return
-
-            # Persist the full feed so Backlog mode can cross-reference it
-            session["deals_cache"] = {
-                "ts":    time.time(),
-                "deals": [_deal_to_dict(g) for g in all_deals],
-            }
 
             # Surface warnings for any deal sources that failed
             if sale_warnings:
                 yield f'data: {json.dumps({"warnings": sale_warnings})}\n\n'
 
-            # Apply the user's threshold and exclude already-owned games for the
-            # actual recommendation (owned games are interesting for the cache but
-            # not for "what should I buy").
+            # Apply user-visible filters locally against the broad cached feed
             sale_games = [
                 g for g in all_deals
-                if g.discount_percent >= min_discount and g.app_id not in owned_ids
+                if g.discount_percent >= min_discount
+                and g.app_id not in owned_ids
+                and (_source_key_for_game(g) in requested_sources or not _source_key_for_game(g))
             ]
             if not sale_games:
                 yield f'data: {json.dumps({"error": "No sales found above the discount threshold. Try lowering it."})}\n\n'
@@ -1080,31 +1074,21 @@ async def recommend(
                 yield f'data: {json.dumps({"error": "No unplayed games found in your library."})}\n\n'
                 return
 
-            # ── Pull deal library (populate from mode 2's cache if available) ───
-            deals_cache = session.get("deals_cache", {})
-            cache_age   = time.time() - deals_cache.get("ts", 0)
-            if not deals_cache.get("deals") or cache_age > 3600:
-                # Cache is empty or stale — fetch deals now so we can annotate
+            # ── Pull shared deal library (6h TTL) to annotate unplayed games ────
+            cache_was_warm = bool(
+                (session.get("deals_cache") or {}).get("games")
+                and time.time() - session["deals_cache"].get("ts", 0) < DEALS_CACHE_TTL
+            )
+            if not cache_was_warm:
                 yield status("Fetching deal prices for your backlog…")
-                from game_recommender.steam_sales import _ALL_SOURCES
-                steam_creds_new = session.get("steam", {})
-                has_key_new     = bool(steam_creds_new.get("api_key"))
-                bg_sources      = _ALL_SOURCES - ({"steam_wishlist"} if not has_key_new else set())
-                try:
-                    bg_deals, _ = await asyncio.to_thread(
-                        _fetch_sales, 1, steam_creds_new, bg_sources, set()
-                    )
-                    session["deals_cache"] = {
-                        "ts":    time.time(),
-                        "deals": [_deal_to_dict(g) for g in bg_deals],
-                    }
-                except Exception:
-                    session["deals_cache"] = {"ts": time.time(), "deals": []}
+            try:
+                bg_deals, _, _ = await _get_or_fetch_deals(session)
+            except Exception:
+                bg_deals = []
 
-            # Build lookup dicts: prefer app_id match, fall back to name
-            cached_deals = session["deals_cache"].get("deals", [])
-            by_app_id = {d["app_id"]: d for d in cached_deals if d.get("app_id")}
-            by_name   = {d["name"].lower(): d for d in cached_deals}
+            # Build lookup dicts from raw SaleGame objects
+            by_app_id = {g.app_id: _deal_to_dict(g) for g in bg_deals if g.app_id}
+            by_name   = {g.name.lower(): _deal_to_dict(g) for g in bg_deals}
 
             # Annotate each unplayed game with its current deal (if any)
             def _annotate(g: dict) -> dict:
@@ -1185,56 +1169,49 @@ async def get_deals(
     min_discount: int = 40,
     deal_sources: str = "",
     include_itad: bool = True,
+    refresh: bool = False,
     session_id: str | None = Cookie(default=None),
 ):
     """Fetch current deals as JSON for the standalone deals table.
 
-    This endpoint mirrors sales-mode deal loading used by /api/recommend but
-    returns a single JSON payload instead of SSE events.
+    Reads from the session-scoped deal cache (6-hour TTL) so repeated loads —
+    and the /api/recommend sales & backlog modes — share one network fetch.
+    Pass refresh=true to force a refetch.
+
+    Filters (min_discount, deal_sources, owned games) are applied locally
+    against the broadly-fetched cached feed.
     """
     _, session = _get_session(session_id)
     if not session:
         raise HTTPException(400, "No platforms connected")
 
-    # Reuse cached/imported library if available so owned games can be filtered
-    # out from deal candidates (and wishlist checks can use known ownership).
+    # Reuse cached/imported library so owned games can be filtered out
     library_resp = await get_library(skip_ratings=True, session_id=session_id)
     games_raw = library_resp.get("games", [])
     owned_ids = {g.get("app_id") for g in games_raw if g.get("app_id")}
 
     from game_recommender.steam_sales import _ALL_SOURCES
-
-    steam_creds = session.get("steam", {})
-    sources = (
+    steam_creds    = session.get("steam", {})
+    has_steam_key  = bool(steam_creds.get("api_key"))
+    requested_sources = (
         set(deal_sources.split(",")) & _ALL_SOURCES
         if deal_sources
-        else _ALL_SOURCES
+        else set(_ALL_SOURCES)
     )
-    has_steam_key = bool(steam_creds.get("api_key"))
-    if "steam_wishlist" in sources and not has_steam_key:
-        sources = sources - {"steam_wishlist"}
+    if "steam_wishlist" in requested_sources and not has_steam_key:
+        requested_sources.discard("steam_wishlist")
 
-    sale_games, sale_warnings = await asyncio.to_thread(
-        _fetch_sales,
-        min_discount,
-        steam_creds,
-        sources,
-        owned_ids,
-    )
+    all_games, sale_warnings, cache_age = await _get_or_fetch_deals(session, force=refresh)
 
-    deals_payload = [
-        {
-            "name":     g.name,
-            "store":    g.store,
-            "app_id":   g.app_id,
-            "discount": g.discount_percent,
-            "sale":     g.sale_price,
-            "original": g.original_price,
-            "wishlist": g.from_wishlist,
-            "url":      g.store_url,
-        }
-        for g in sale_games
+    # Apply local filters against the broadly-cached feed
+    sale_games = [
+        g for g in all_games
+        if g.discount_percent >= min_discount
+        and (not g.app_id or g.app_id not in owned_ids)
+        and (_source_key_for_game(g) in requested_sources or not _source_key_for_game(g))
     ]
+
+    deals_payload = [_deal_to_dict(g) for g in sale_games]
 
     itad_data = {}
     itad_key = os.environ.get("ITAD_API_KEY")
@@ -1248,6 +1225,7 @@ async def get_deals(
         "deals": deals_payload,
         "warnings": sale_warnings,
         "itad_data": itad_data,
+        "cache_age_seconds": int(cache_age),
     }
 
 
@@ -1288,6 +1266,78 @@ def _deal_to_dict(g) -> dict:
         "wishlist": g.from_wishlist,
         "url":      g.store_url,
     }
+
+
+# ── Deal cache ────────────────────────────────────────────────────────────────
+# Deals rotate on Steam roughly daily (daily deals ~10am PT, weekly sales
+# Tue/Fri ~10am PT). A 6-hour TTL is a reasonable compromise between freshness
+# and fetch frequency. Pass refresh=true to /api/deals to force a refetch.
+DEALS_CACHE_TTL = 6 * 3600  # seconds
+
+
+def _source_key_for_game(g) -> str:
+    """Map a SaleGame back to its source key in _ALL_SOURCES.
+
+    Used when filtering a broadly-cached feed by the user's selected
+    deal_sources. Returns an empty string for unrecognized stores.
+    """
+    store = (g.store or "").lower()
+    if store == "steam":
+        return "steam_wishlist" if g.from_wishlist else "steam_featured"
+    if store == "gog":
+        return "gog"
+    if "humble" in store:
+        return "humble"
+    if store == "fanatical":
+        return "fanatical"
+    if "green" in store or store == "gmg":
+        return "gmg"
+    if "epic" in store:
+        sale = str(g.sale_price).strip().lower()
+        if sale in ("free", "$0.00", "$0", "0", "0.00"):
+            return "epic_free"
+        return "epic_deals"
+    return ""
+
+
+async def _get_or_fetch_deals(session: dict, *, force: bool = False) -> tuple[list, list[str], float]:
+    """Return (raw_sale_games, warnings, cache_age_seconds).
+
+    Fetches the broad current-deals feed (no discount threshold, no owned-games
+    filter, all source-types the session's credentials allow) and caches it on
+    the session for DEALS_CACHE_TTL seconds. Callers apply their own filters
+    (min_discount, deal_sources, owned_ids) against the returned list.
+
+    force=True refetches even if the cache is warm.
+
+    Cache shape: session["deals_cache"] = {
+        "ts":       <unix_timestamp>,
+        "games":    [SaleGame, ...],   # raw objects (in-memory only)
+        "warnings": [str, ...],
+    }
+    """
+    from game_recommender.steam_sales import _ALL_SOURCES
+
+    cache = session.get("deals_cache") or {}
+    ts = cache.get("ts", 0)
+    age = time.time() - ts
+    games = cache.get("games")
+    if (not force) and games is not None and age < DEALS_CACHE_TTL:
+        return games, cache.get("warnings", []), age
+
+    steam_creds    = session.get("steam", {})
+    has_steam_key  = bool(steam_creds.get("api_key"))
+    sources        = _ALL_SOURCES if has_steam_key else (_ALL_SOURCES - {"steam_wishlist"})
+
+    raw_games, warnings = await asyncio.to_thread(
+        _fetch_sales, 1, steam_creds, sources, set()
+    )
+    session["deals_cache"] = {
+        "ts":       time.time(),
+        "games":    raw_games,
+        "warnings": warnings,
+    }
+    return raw_games, warnings, 0.0
 
 
 def _enrich_deals_with_itad(sale_games: list, itad_key: str) -> dict:
@@ -1659,6 +1709,25 @@ async def get_recommendation_history():
         return {"history": history}
     except Exception:
         return {"history": []}
+
+
+@app.delete("/api/recommendations/history")
+async def delete_recommendation(timestamp: str):
+    """Delete a single recommendation from history, identified by its timestamp.
+
+    Timestamps are ISO strings generated client-side when the recommendation
+    was saved; they're unique per save in practice. If the timestamp is not
+    found, the call is a no-op (returns ok=True).
+    """
+    if not _HISTORY_FILE.exists():
+        return {"ok": True}
+    try:
+        history = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+        filtered = [h for h in history if h.get("timestamp") != timestamp]
+        _HISTORY_FILE.write_text(json.dumps(filtered, indent=1), encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to delete recommendation: {e}")
+    return {"ok": True, "removed": len(history) - len(filtered)}
 
 
 # ── Prompt builders ───────────────────────────────────────────────────────────

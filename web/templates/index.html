@@ -352,7 +352,18 @@
   :is(#deals-table-wrap, #deals-library-wrap) summary::-webkit-details-marker { display: none; }
   :is(#deals-table-wrap, #deals-library-wrap) summary .toggle-arrow { font-size: 0.65rem; transition: transform 0.15s; }
   :is(#deals-table-wrap, #deals-library-wrap) details[open] summary .toggle-arrow { transform: rotate(90deg); }
-  :is(#deals-table-wrap, #deals-library-wrap) .deals-scroll { overflow-x: auto; }
+  /* Cap visible rows (~15-20) and let the user scroll; the sticky header
+     keeps column labels visible while scrolling long lists. */
+  :is(#deals-table-wrap, #deals-library-wrap) .deals-scroll {
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 650px;
+  }
+  :is(#deals-table-wrap, #deals-library-wrap) .deals-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
   :is(#deals-table-wrap, #deals-library-wrap) .deals-toolbar {
     display: flex;
     align-items: center;
@@ -638,6 +649,21 @@
   }
   .history-item:hover { border-color: var(--accent); }
   .history-item .hist-meta { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+  .history-item .hist-delete {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+  }
+  .history-item:hover .hist-delete { opacity: 1; }
+  .history-item .hist-delete:hover { color: #f87171; background: rgba(248,113,113,0.12); }
   .history-item .hist-time { font-size: 0.72rem; color: var(--muted); }
   .history-item .hist-mode { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; background: rgba(124,106,255,0.2); color: var(--accent2); padding: 1px 5px; border-radius: 3px; }
   .history-item .hist-prefs { font-size: 0.78rem; color: var(--muted); font-style: italic; }
@@ -2608,12 +2634,15 @@ function _renderHistory(history) {
     const promptBlock = isOpen && h.preferences
       ? `<div class="hist-prompt"><span class="hist-prompt-label">Prompt:</span> ${escHtml(h.preferences)}</div>`
       : '';
+    const tsAttr = escHtml(h.timestamp || '');
     return `
       <div class="history-item" onclick="_toggleHistoryItem(${i})">
         <div class="hist-meta">
           <span class="hist-mode">${escHtml(h.mode || 'library')}</span>
           ${prefsText ? `<span class="hist-prefs">${prefsText}</span>` : ''}
           <span class="hist-time">${escHtml(ts)}</span>
+          <button class="hist-delete" title="Delete this recommendation"
+                  onclick="event.stopPropagation(); _deleteHistoryItem('${tsAttr}')">🗑</button>
         </div>
         ${!isOpen ? `<div class="hist-preview">${escHtml(preview)}</div>` : ''}
         ${promptBlock}
@@ -2642,6 +2671,18 @@ function _toggleHistoryItem(idx) {
     _expandedHistIdx = idx;
   }
   _renderHistory(history);
+}
+
+async function _deleteHistoryItem(timestamp) {
+  if (!timestamp) return;
+  if (!confirm('Delete this recommendation from history?')) return;
+  try {
+    await fetch(`/api/recommendations/history?timestamp=${encodeURIComponent(timestamp)}`, {
+      method: 'DELETE',
+    });
+    _expandedHistIdx = null;  // collapse any open item so indices stay clean
+    _loadRecommendationHistory();
+  } catch (e) {}
 }
 
 // ── Genre Bubble Chart ──────────────────────────────────────────────────────────
