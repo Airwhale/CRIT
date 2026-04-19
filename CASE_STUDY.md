@@ -28,31 +28,56 @@ Most "game recommender" projects stop at calling a content-based similarity API.
 - **Cost-aware LLM integration.** The library taste profile is passed with `cache_control: ephemeral` so the ~5 KB context isn't re-billed on every call. Models and "deep thinking" are user-selectable so cost and quality scale to the question.
 - **External data correlation.** IsThereAnyDeal historical price data is batched, cached, and verdicted (all-time low / near low / below regular) to give each deal a second dimension beyond "% off."
 
-## Architecture at a glance
+## How a recommendation flows end-to-end
+
+Left to right: connect platforms once, load library (fetch + enrich), then ask Claude to reason over the assembled profile. Claude only runs after every input it needs is in hand.
 
 ```mermaid
-flowchart LR
-    User((User))
-    Browser["Browser<br/>vanilla JS · SSE client<br/>localStorage session"]
-    Backend["FastAPI + Uvicorn<br/>in-memory sessions<br/>6 h shared deals cache<br/>file-backed history"]
+sequenceDiagram
+    autonumber
+    actor User
+    participant Browser
+    participant Backend as FastAPI + Uvicorn
+    participant Stores as Steam · Epic · GOG
+    participant RAWG
+    participant ITAD
+    participant Claude as Anthropic Claude
 
-    Steam["Steam<br/>OpenID 2.0 · XML/API"]
-    Epic["Epic Games<br/>OAuth + paste fallback"]
-    GOG["GOG<br/>OAuth + postMessage fallback"]
-    RAWG["RAWG<br/>ratings · genres · metadata"]
-    ITAD["IsThereAnyDeal<br/>historical prices · verdicts"]
-    Claude["Anthropic Claude<br/>Sonnet 4.6 / Haiku 4.5 / Opus 4.6<br/>prompt caching · streaming"]
+    Note over User,Stores: 1. Connect (once per session)
+    User->>Browser: Log in via Steam / Epic / GOG
+    Browser->>Backend: OAuth callback / OpenID
+    Backend->>Stores: Token exchange
+    Stores-->>Backend: Credentials (held in-memory only)
 
-    User --> Browser
-    Browser <-->|SSE · fetch| Backend
+    Note over User,RAWG: 2. Load library
+    User->>Browser: Click "Load Library"
+    Browser->>Backend: GET /api/library (SSE)
+    Backend->>Stores: Fetch owned games (parallel)
+    Stores-->>Backend: Merged unified library
+    Backend-->>Browser: SSE: games event (renders immediately)
+    loop per game
+        Backend->>RAWG: Lookup rating / genres / metadata
+        RAWG-->>Backend: Enrichment
+        Backend-->>Browser: SSE: rawg_update (row fills in live)
+    end
 
-    Backend --> Steam
-    Backend --> Epic
-    Backend --> GOG
-    Backend --> RAWG
-    Backend --> ITAD
-    Backend -.->|messages.stream| Claude
-    Claude -.->|token chunks| Backend
+    Note over User,Claude: 3. Recommend
+    User->>Browser: Click "Recommend" (mode = library / sales / backlog / discover)
+    Browser->>Backend: GET /api/recommend (SSE)
+    opt sales or backlog mode
+        Backend->>Backend: Check 6 h deals cache
+        alt cache cold
+            Backend->>ITAD: Fetch current deals + historical lows
+            ITAD-->>Backend: Price history + verdicts
+        end
+        Backend-->>Browser: SSE: deals event
+    end
+    Backend->>Claude: messages.stream(library + deals + user prompt)
+    loop token chunks
+        Claude-->>Backend: text delta
+        Backend-->>Browser: SSE: text event (word-by-word render)
+    end
+    Backend-->>Browser: SSE: done
 ```
 
 <!-- ARCHITECTURE / UNIFIED LIBRARY SCREENSHOT — the merged library table with all three
