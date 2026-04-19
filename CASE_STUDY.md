@@ -6,31 +6,29 @@
 
 After a decade of Steam sales, Humble bundles, and Epic giveaways, I own hundreds of games across three stores and no good way to decide what to play next. Existing recommenders look at one storefront at a time, don't know what I've already finished, So I put together something that looks at my total library across three platforms, my steam playtime, and current deals, and reccomends me what I should play next from my current library or deep discount sales.
 
-<!-- HERO SCREENSHOT — main app view with library loaded and a recommendation mid-stream.
-     Suggested filename: docs/screenshots/hero.png
-     Suggested size: 1400px wide -->
 ![CRIT hero view — library + streaming recommendation](docs/screenshots/hero.png)
 
 ## What it does
 
-CRIT unifies a user's full library from three platforms, hands that taste profile to Claude, and streams back a reasoned pick-of-the-day — from games already owned, current sales, the unplayed backlog, or something new entirely.
+Pulls your library from Steam, Epic, and GOG into one view. Hands it to Claude along with playtime, genre, and whatever mood you typed in. Streams back a pick — from what you own, what's on sale, what you haven't played, or something new.
 
-> **Repo:** https://github.com/Airwhale/CRIT · **Stack:** FastAPI · SSE streaming · Claude (Sonnet 4.6 / Haiku 4.5 / Opus 4.6) · vanilla JS frontend
+> **Repo:** https://github.com/Airwhale/CRIT · **Stack:** FastAPI · SSE · Anthropic SDK · vanilla JS
 
 ---
 
-## Why this was interesting to engineer
+## Interesting engineering problems
 
-Most "game recommender" projects stop at calling a content-based similarity API. The interesting problems in CRIT live elsewhere:
+- **Three auth systems, three sets of constraints.** Steam speaks OpenID 2.0. Epic's public launcher client ID only accepts `localhost` redirects. GOG pins its redirect to `embed.gog.com`, so the server can't receive the callback directly. Each one has a fallback where the user pastes a code from the URL bar.
 
-- **Three unrelated auth systems, each with real constraints.** Steam OpenID 2.0, Epic Games OAuth (public launcher client ID only accepts `localhost` redirects), GOG OAuth (fixed `embed.gog.com` redirect URI, so the server can't receive the callback directly). Each flow has a primary path and a manual-paste fallback for when the primary path breaks — designed to degrade gracefully rather than leave the user stuck.
-- **Progressive disclosure under a slow dependency.** RAWG rating lookups for a 300-game library take 30+ seconds. Rather than block the whole load, the library table renders the instant the platform fetch returns, and per-game ratings stream in row-by-row as each RAWG lookup finishes. The user is reading their library while enrichment is still happening — a concrete UX win that emerges from the streaming architecture rather than from waiting on a slow dependency.
-- **Cross-platform ownership matching without a fuzzy-match dependency.** The same game lives under slightly different titles across Steam, Epic, and GOG — edition suffixes, ™/® marks, punctuation quirks. A normalizer strips those noise sources and does an exact match on the result, catching the common cases without pulling in a fuzzy-matching library. The LLM prompt also carries the owned-titles list as a second safety net, so anything the normalizer misses, the model catches. A two-layer defense against recommending games you already own on another store.
-- **External data correlation.** IsThereAnyDeal historical price data is batched, cached, and verdicted (all-time low / near low / below regular) to give each deal a second dimension beyond "% off."
+- **Slow dependency, progressive render.** RAWG metadata for 300 games takes 30 seconds. The library table renders as soon as the platform fetch returns; ratings fill in per row as each RAWG call completes. You're reading the table while we're still fetching.
 
-## How a recommendation flows end-to-end
+- **Cross-store ownership without a fuzzy-match library.** "Hades" on Steam, "Hades™" on Epic, "Hades: Game of the Year Edition" on GOG — same game, three titles. A normalizer (lowercase, strip trademark marks, drop edition suffixes) does exact match on the result. The prompt also carries the owned-titles list as a backstop, so anything the normalizer misses, Claude skips. Two layers, no fuzzy-string dependency.
 
-Left to right: connect platforms once, load library (fetch + enrich), then ask Claude to reason over the assembled profile. Claude only runs after every input it needs is in hand.
+- **Historical price correlation.** IsThereAnyDeal prices are batched, cached, and verdicted — all-time low, near low, below regular. A 30% discount on a game that hits 70% off every summer reads differently from a first-ever discount.
+
+## How it flows
+
+Connect once, load library (fetch + enrich), then ask Claude. Claude runs last, after every input is assembled.
 
 ```mermaid
 sequenceDiagram
@@ -80,44 +78,27 @@ sequenceDiagram
     Backend-->>Browser: SSE: done
 ```
 
-<!-- ARCHITECTURE / UNIFIED LIBRARY SCREENSHOT — the merged library table with all three
-     platforms visible, RAWG ratings filled in, sortable columns.
-     Suggested filename: docs/screenshots/library.png -->
 ![Unified library across Steam, Epic, and GOG](docs/screenshots/library.png)
-
-## Engineering decisions I'd defend
-
-- **Credentials in memory, history on disk.** Secrets (API keys, OAuth tokens) live only in `_sessions` and die on restart — explicitly so that a home-server deploy can't leak them. Recommendation history persists because it's user-owned and useful across sessions. The asymmetry is deliberate, not accidental.
-- **Fetch broadly, filter locally.** The deals cache stores the full source feed (no discount threshold, no owned filter). `/api/deals`, sales-mode recommendations, and backlog-mode recommendations all apply their own filters against one shared fetch. Three consumers, one network round-trip, 6-hour TTL.
-- **SSE over WebSockets.** The streaming is one-way (server → client) and single-session. SSE gives the same "alive" feel with less infrastructure, clean reverse-proxy behavior (`proxy_buffering off` is the only Nginx knob), and trivial reconnect semantics.
-- **Vanilla JS, no build step.** One 3 KLoC HTML template, no bundler, no framework overhead. The trade-off is real — a component system would make the frontend easier to grow — but for a single-purpose tool it keeps the footprint small and the dev loop instant.
-- **Prompt-level safety nets.** Every recommendation mode passes the full owned-titles list in the prompt and explicitly instructs Claude not to suggest games already in the library, even when they appear in the deals feed on a different store. Cross-platform dedup by name where app-IDs don't match.
-
-<!-- STREAMING RECOMMENDATION SCREENSHOT — Claude output mid-stream, with a visible cursor
-     and a partial recommendation. Ideally captured during the "Discover" or "From Library" mode.
-     Suggested filename: docs/screenshots/streaming.png -->
-![Streaming recommendation mid-response](docs/screenshots/streaming.png)
-
-<!-- DEALS TABLE SCREENSHOT — scrollable deals table with historical-low badges from ITAD
-     and a "Buy →" column. Great to capture during a sale period.
-     Suggested filename: docs/screenshots/deals.png -->
-![Current deals with historical-low verdicts](docs/screenshots/deals.png)
 
 ## Numbers
 
-- **~5,000** lines of Python across the backend, platform adapters, and prompt builders
-- **196** pytest tests, all externals mocked (no network calls in CI)
-- **3** OAuth / identity flows (Steam, Epic, GOG), each with a fallback path
-- **4** recommendation modes (From Library, Steam Deals, Backlog, Discover)
-- **6-hour** session-scoped deals cache, shared across three endpoints
-- **3 models** selectable at request time (Haiku 4.5 / Sonnet 4.6 / Opus 4.6)
+- ~5,000 lines of Python
+- 196 pytest tests, all externals mocked
+- 3 OAuth / identity flows with fallbacks
+- 4 recommendation modes
+- 6-hour deals cache, 3 endpoints sharing it
+- 3 models selectable per request (Haiku 4.5 / Sonnet 4.6 / Opus 4.6)
 
-## Trade-offs worth naming
+![Streaming recommendation mid-response](docs/screenshots/streaming.png)
 
-- **Single-user session model.** Good: simple, secure by design. Bad: not multi-tenant — would need a real session store (Redis or similar) and proper isolation to expose publicly.
-- **Client-side deal-source filtering.** Good: one broad fetch serves everything. Bad: source tagging uses a store-name heuristic; if a platform renames its store string, the filter fails open.
-- **File-backed history.** Good: zero infra, survives restart. Bad: doesn't scale beyond one user and isn't encrypted at rest — fine for a home-server tool, not fine for a shared deployment.
+## Trade-offs
+
+- **Single-user sessions.** Simple and secure; not multi-tenant. Exposing publicly would need a real session store.
+- **Deal-source tagging by store name.** If Humble renames itself, the filter fails open. Cheap and works today.
+- **History in a flat JSON file.** No infra, survives restart. Not encrypted, not scalable — wrong for a shared deploy, right for this one.
+
+![Current deals with historical-low verdicts](docs/screenshots/deals.png)
 
 ---
 
-*Built as a personal tool and deliberately scoped that way — a real, working system that exercises OAuth, streaming LLMs, external data integration, and thoughtful caching, without pretending to be something it's not.*
+*Built for one user on purpose. Product-side reasoning in [PRODUCT_BRIEF.md](PRODUCT_BRIEF.md).*
