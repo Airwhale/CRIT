@@ -36,11 +36,7 @@ Nothing combines my whole library, what I've actually played, reviews, and curre
 - Free-text mood beats dropdowns. Users write more useful context than they'd click.
 - No stored credentials. You re-log-in after a restart; nothing leaks.
 
-## If I shipped this publicly, I'd cut
-
-- Model choice and the thinking toggle. Advanced menu only.
-
-## And I'd add
+## If I shipped this publicly, I'd add
 
 - Onboarding. There's nothing today.
 - Thumbs up/down on picks, fed into the next prompt.
@@ -55,4 +51,4 @@ Nothing combines my whole library, what I've actually played, reviews, and curre
 
 ---
 
-CRIT is what I use three nights a week. Engineering side in [ENGINEERING_BRIEF.md](ENGINEERING_BRIEF.md).
+CRIT is a personal tool that I use once a week. Engineering side in [ENGINEERING_BRIEF.md](ENGINEERING_BRIEF.md).
