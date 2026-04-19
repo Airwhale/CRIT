@@ -27,7 +27,9 @@ if not _ENV.exists():
         print("Warning: no .env file found. Set ANTHROPIC_API_KEY (and optionally RAWG_API_KEY) as environment variables.")
 
 if __name__ == "__main__":
-    print("CRIT — Curated Recommendations In Titles → http://localhost:8000")
+    # Use ASCII-only output so the banner doesn't crash on Windows consoles
+    # running the cp1252 codec (the default for a freshly-installed Python).
+    print("CRIT - Curated Recommendations In Titles -> http://localhost:8000")
     # host="0.0.0.0" binds to all interfaces, making the server reachable
     # from other devices on the local network (e.g. mobile browser testing).
     # For local-only use, change to host="127.0.0.1".

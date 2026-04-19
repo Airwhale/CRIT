@@ -664,6 +664,18 @@
   }
   .history-item:hover .hist-delete { opacity: 1; }
   .history-item .hist-delete:hover { color: #f87171; background: rgba(248,113,113,0.12); }
+  /* Two-step delete: first click flips the button into an "armed" state that
+     shows the confirmation label; second click within 3 s performs the delete. */
+  .history-item .hist-delete.armed {
+    opacity: 1;
+    color: #ef4444;
+    background: rgba(239,68,68,0.15);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 2px 8px;
+    text-transform: uppercase;
+  }
   .history-item .hist-time { font-size: 0.72rem; color: var(--muted); }
   .history-item .hist-mode { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; background: rgba(124,106,255,0.2); color: var(--accent2); padding: 1px 5px; border-radius: 3px; }
   .history-item .hist-prefs { font-size: 0.78rem; color: var(--muted); font-style: italic; }
@@ -2260,6 +2272,11 @@ function getRecommendations() {
       recDealsTitle.textContent = 'Deal candidates fetched';
       recDealsTitle.style.display = 'block';
       renderDealsTableIn(dealsWrap, dealsData, itadDataStore);
+
+      // Auto-populate the standalone Deals Library card above. The deal cache
+      // is already warm from the sales-mode fetch, so this reuses the same
+      // data with that card's own filter settings instead of re-fetching.
+      loadDealsLibrary().catch(() => {});
       return;
     }
 
@@ -2274,15 +2291,31 @@ function getRecommendations() {
     }
   };
 
-  es.onerror = () => {
+  es.onerror = async () => {
     es.close();
     cursor.setAttribute('hidden', '');
     statusLine.hidden = true;
     btn.disabled = false;
     btn.innerHTML = '✨ Recommend';
-    if (!rawText) {
-      content.innerHTML = '<div class="notice error visible">Connection error. Make sure ANTHROPIC_API_KEY is set in your .env file.</div>';
-    }
+    if (rawText) return;  // Partial output is already rendered
+
+    // EventSource swallows HTTP response bodies on non-200 responses, so
+    // replay the request as a plain fetch to extract whatever the server
+    // sent back (e.g. FastAPI 400 detail) and show it to the user.
+    let message = 'Connection error — the recommendation stream failed to open. Check the server logs.';
+    try {
+      const r = await fetch(`/api/recommend?${params}`);
+      if (!r.ok) {
+        const text = await r.text();
+        try {
+          const json = JSON.parse(text);
+          message = json.detail || json.error || text.substring(0, 400);
+        } catch (_) {
+          message = text.substring(0, 400) || message;
+        }
+      }
+    } catch (_) { /* network truly down — keep generic message */ }
+    content.innerHTML = `<div class="notice error visible">${escHtml(message)}</div>`;
   };
 }
 
@@ -2615,6 +2648,11 @@ async function _loadRecommendationHistory() {
 let _expandedHistIdx = null;
 
 function _renderHistory(history) {
+  // Re-rendering wipes any armed delete button from the DOM, so clear the
+  // pending-delete state too — otherwise a lingering timestamp could make
+  // the next click skip the arm step.
+  _clearPendingDelete();
+
   const section = document.getElementById('history-section');
   const listEl  = document.getElementById('history-list');
   if (!history.length) {
@@ -2642,7 +2680,7 @@ function _renderHistory(history) {
           ${prefsText ? `<span class="hist-prefs">${prefsText}</span>` : ''}
           <span class="hist-time">${escHtml(ts)}</span>
           <button class="hist-delete" title="Delete this recommendation"
-                  onclick="event.stopPropagation(); _deleteHistoryItem('${tsAttr}')">🗑</button>
+                  onclick="event.stopPropagation(); _deleteHistoryItem('${tsAttr}', this)">🗑</button>
         </div>
         ${!isOpen ? `<div class="hist-preview">${escHtml(preview)}</div>` : ''}
         ${promptBlock}
@@ -2673,9 +2711,42 @@ function _toggleHistoryItem(idx) {
   _renderHistory(history);
 }
 
-async function _deleteHistoryItem(timestamp) {
+// Two-step delete state: first click arms the button (shows "Click again"),
+// second click within the timeout actually deletes. Clicking a different
+// trash button or waiting out the timeout disarms.
+let _pendingDeleteTimestamp = null;
+let _pendingDeleteTimeout   = null;
+const _DELETE_ARM_MS = 3000;
+
+function _clearPendingDelete() {
+  if (_pendingDeleteTimeout) {
+    clearTimeout(_pendingDeleteTimeout);
+    _pendingDeleteTimeout = null;
+  }
+  document.querySelectorAll('.hist-delete.armed').forEach(b => {
+    b.textContent = '🗑';
+    b.classList.remove('armed');
+  });
+  _pendingDeleteTimestamp = null;
+}
+
+async function _deleteHistoryItem(timestamp, btn) {
   if (!timestamp) return;
-  if (!confirm('Delete this recommendation from history?')) return;
+
+  // First click on this button — arm it and wait for a confirmation click
+  if (_pendingDeleteTimestamp !== timestamp) {
+    _clearPendingDelete();
+    _pendingDeleteTimestamp = timestamp;
+    if (btn) {
+      btn.textContent = 'Click again';
+      btn.classList.add('armed');
+    }
+    _pendingDeleteTimeout = setTimeout(_clearPendingDelete, _DELETE_ARM_MS);
+    return;
+  }
+
+  // Second click — perform the delete
+  _clearPendingDelete();
   try {
     await fetch(`/api/recommendations/history?timestamp=${encodeURIComponent(timestamp)}`, {
       method: 'DELETE',

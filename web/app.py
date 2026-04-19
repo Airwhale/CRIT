@@ -36,8 +36,11 @@ from fastapi import FastAPI, Request, Response, HTTPException, Cookie
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from dotenv import load_dotenv
 
-# Load .env before anything else reads environment variables
-load_dotenv()
+# Load .env before anything else reads environment variables.
+# override=True so the .env file is authoritative — this prevents surprises
+# when a shell pre-exports an empty or stale value (e.g. a parent process that
+# sets ANTHROPIC_API_KEY="" would otherwise mask the real value in .env).
+load_dotenv(override=True)
 
 app = FastAPI(title="CRIT — Curated Recommendations In Titles")
 
@@ -1774,18 +1777,26 @@ def _build_sales_prompt(
 
     library_lines = "\n".join(_game_line(g) for g in games)
     sale_lines    = "\n".join(_sale_line(s) for s in sale_games)
+    # Explicit owned-names list so Claude can cross-reference by title when a
+    # user owns a game on one store and it's on sale on another.
+    owned_names   = "\n".join(f"- {g['name']}" for g in games)
     prefs_section = f"\n\n**Player's mood / preferences:** {preferences}" if preferences else ""
 
     if count > 10:
         format_instructions = (
             "For each, use this compact format:\n\n"
-            "**N. Game Name** — *XX% off → $Y.YY* — One sentence on why they should buy it.\n\n"
+            "**N. Game Name** [Store] \u2014 *XX% off \u2192 $Y.YY* \u2014 One sentence on why they should buy it.\n\n"
+            "The store in square brackets must match what appears in the deals list above "
+            "(e.g. [Steam], [GOG], [Humble Store], [Epic Games Store], [Fanatical], [GreenManGaming]). "
             "No other commentary. Just the numbered list."
         )
     else:
         format_instructions = (
             "For each recommendation:\n\n"
-            "1. **Game Name** — *XX% off → $Y.YY (was $Z.ZZ)*\n"
+            "1. **Game Name** \u2014 *XX% off \u2192 $Y.YY (was $Z.ZZ)*\n"
+            "   - **Store:** Which platform this deal is on (Steam / GOG / Humble Store / "
+            "Epic Games Store / Fanatical / GreenManGaming) \u2014 must match the store shown "
+            "in the deals list above.\n"
             "   - **Why it fits:** 2\u20133 sentences connecting it to their library history\n"
             "   - **Genre match:** Which games they've played it's most similar to\n"
             "   - **Deal quality:** Is this a historically good discount or just okay?\n\n"
@@ -1795,14 +1806,19 @@ def _build_sales_prompt(
 
     cached = (
         f"You are a gaming deal advisor. Your job is to identify which current game deals best match a player's taste.\n\n"
-        f"**PLAYER'S LIBRARY (taste profile):**\n{library_lines}"
+        f"**PLAYER'S LIBRARY (taste profile):**\n{library_lines}\n\n"
+        f"**ALREADY-OWNED TITLES (across Steam, Epic, and GOG — never recommend any of these, "
+        f"even if they appear in the deals list on a different store):**\n{owned_names}"
     )
     rest = (
         f"{prefs_section}\n\n"
-        f"**CURRENT DEALS (not yet owned, across multiple stores):**\n{sale_lines}\n\n"
+        f"**CURRENT DEALS:**\n{sale_lines}\n\n"
         f"From the deals listed above, recommend exactly {count} games this player should buy. "
         f"Include the store name in each recommendation so the player knows where to get it. "
         f"Wishlist items are already ones they want \u2014 prioritise them if they match.\n\n"
+        f"**Hard constraint:** do not recommend any title that appears in the owned list above, "
+        f"regardless of which store is selling it. Cross-store duplicates (same game on a different "
+        f"platform) should be skipped \u2014 the player already owns the game.\n\n"
         f"{format_instructions}\n\nOnly recommend games from the deals list above."
     )
     return cached, rest
