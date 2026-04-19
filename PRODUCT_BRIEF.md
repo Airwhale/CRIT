@@ -14,26 +14,26 @@ PC gamers with libraries on two or three stores, who grab the free Epic game eve
 
 ## What it needs to do
 
-I have ninety minutes tonight. Open something I'll actually like. That's it.
+I have ninety minutes tonight to play a game. Give me a reccomendationon something I will like. That's it.
 
 The decision happens most evenings, the stakes are low, and it's defined by trust. If I don't believe the pick, I'll burn twenty minutes second-guessing it instead of playing.
 
 ## Existing options fall short
 
 - **Steam's own recommendations** only see Steam and push what Valve wants to sell.
-- **Similarity tools** match games to games. They don't know I finished Hades.
+- **Similarity tools** match games to games. They don't know what I have spent time playing in the past.
 - **HowLongToBeat, Metacritic** — useful, but they don't pick.
 - **"What should I play" subreddits** — personal but slow and blind to my library.
 
-Nothing combines my whole library, what I've actually played, and current prices. An LLM with those inputs can.
+Nothing combines my whole library, what I've actually played, reviews, and current prices. An LLM with those inputs can.
 
 ![Unified library across Steam, Epic, and GOG](docs/screenshots/library.png)
 
 ## Bets
 
-- Reasoning beats matching for a once-a-day decision. The LLM can hold "narrative roguelike with a dark tone, but shorter tonight" in its head. A similarity API can't.
+
 - Players think about *their games*, not *their Steam*. One unified table across stores.
-- Four named modes — play / buy / backlog / discover — instead of one "recommend" button. Faster than guessing intent.
+- Four named modes — play / buy / backlog / discover — instead of one "recommend" button. Each have different prompts and a different user flow.
 - Free-text mood beats dropdowns. Users write more useful context than they'd click.
 - No stored credentials. You re-log-in after a restart; nothing leaks.
 
@@ -41,8 +41,6 @@ Nothing combines my whole library, what I've actually played, and current prices
 
 ## If I shipped this publicly, I'd cut
 
-- The four-mode tabs. Infer intent from the mood prompt, fall back on "play something I own."
-- The standalone deals table. Power-user affordance, not a first-run flow.
 - Model choice and the thinking toggle. Advanced menu only.
 
 ## And I'd add
@@ -59,8 +57,6 @@ Nothing combines my whole library, what I've actually played, and current prices
 - **Acceptance rate** — how often do users click through on the pick.
 - **Time to decide** — Recommend click → outbound click. Should drop as the model learns you.
 - **Return rate** — weekly active is the real signal.
-
-Metric I'd refuse to touch: purchases driven through Sales mode. Wrong incentive.
 
 ---
 
