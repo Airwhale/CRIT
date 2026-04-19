@@ -1007,6 +1007,11 @@ async def recommend(
             steam_creds   = session.get("steam", {})
             has_steam_key = bool(steam_creds.get("api_key"))
             owned_ids     = {g["app_id"] for g in games_raw if g.get("app_id")}
+            owned_titles  = {
+                _normalize_title_for_ownership(g.get("name", ""))
+                for g in games_raw
+            }
+            owned_titles.discard("")
 
             # Parse requested sources; default to all when none specified
             requested_sources = (
@@ -1045,6 +1050,7 @@ async def recommend(
                 g for g in all_deals
                 if g.discount_percent >= min_discount
                 and g.app_id not in owned_ids
+                and _normalize_title_for_ownership(g.name) not in owned_titles
                 and (_source_key_for_game(g) in requested_sources or not _source_key_for_game(g))
             ]
             if not sale_games:
@@ -1072,50 +1078,30 @@ async def recommend(
         elif mode == "new":
             # "New" means games the user hasn't played (or barely played).
             # max_new_minutes is the threshold: games at or below it are "unplayed".
+            # Backlog mode is purely about "what should I play next from games I
+            # already own" — deal prices are irrelevant here. Users who want
+            # current deals use the Deals Library card or Sales mode.
             unplayed = [g for g in games_raw if g["playtime_minutes"] <= max_new_minutes]
             if not unplayed:
                 yield f'data: {json.dumps({"error": "No unplayed games found in your library."})}\n\n'
                 return
 
-            # ── Pull shared deal library (6h TTL) to annotate unplayed games ────
-            cache_was_warm = bool(
-                (session.get("deals_cache") or {}).get("games")
-                and time.time() - session["deals_cache"].get("ts", 0) < DEALS_CACHE_TTL
-            )
-            if not cache_was_warm:
-                yield status("Fetching deal prices for your backlog…")
-            try:
-                bg_deals, _, _ = await _get_or_fetch_deals(session)
-            except Exception:
-                bg_deals = []
+            # Sort alphabetically so the candidates table has a stable order
+            unplayed.sort(key=lambda g: g["name"].lower())
 
-            # Build lookup dicts from raw SaleGame objects
-            by_app_id = {g.app_id: _deal_to_dict(g) for g in bg_deals if g.app_id}
-            by_name   = {g.name.lower(): _deal_to_dict(g) for g in bg_deals}
-
-            # Annotate each unplayed game with its current deal (if any)
-            def _annotate(g: dict) -> dict:
-                deal = by_app_id.get(g.get("app_id")) or by_name.get(g["name"].lower())
-                return {**g, "deal": deal} if deal else g
-
-            annotated = [_annotate(g) for g in unplayed]
-            # Sort: on-sale games first (time-sensitive), then by name
-            annotated.sort(key=lambda g: (g.get("deal") is None, g["name"].lower()))
-
-            # Emit the enriched candidate list for the frontend table
+            # Emit the candidate list for the frontend table
             candidates_payload = [
                 {
-                    "name":        g["name"],
-                    "platform":    g["platform"].upper(),
+                    "name":         g["name"],
+                    "platform":     g["platform"].upper(),
                     "playtime_min": g["playtime_minutes"],
-                    "rating":      g.get("rawg_rating"),
-                    "deal":        g.get("deal"),
+                    "rating":       g.get("rawg_rating"),
                 }
-                for g in annotated
+                for g in unplayed
             ]
             yield f'data: {json.dumps({"candidates": candidates_payload})}\n\n'
 
-            prompt = _build_new_game_prompt(games_raw, annotated, preferences, count)
+            prompt = _build_new_game_prompt(games_raw, unplayed, preferences, count)
 
         elif mode == "discover":
             prompt = _build_discover_prompt(games_raw, preferences, count)
@@ -1192,6 +1178,13 @@ async def get_deals(
     library_resp = await get_library(skip_ratings=True, session_id=session_id)
     games_raw = library_resp.get("games", [])
     owned_ids = {g.get("app_id") for g in games_raw if g.get("app_id")}
+    # Cross-platform ownership filter: a game owned on GOG shouldn't show up
+    # in the deals list just because Steam happens to have it on sale too.
+    owned_titles = {
+        _normalize_title_for_ownership(g.get("name", ""))
+        for g in games_raw
+    }
+    owned_titles.discard("")
 
     from game_recommender.steam_sales import _ALL_SOURCES
     steam_creds    = session.get("steam", {})
@@ -1211,6 +1204,7 @@ async def get_deals(
         g for g in all_games
         if g.discount_percent >= min_discount
         and (not g.app_id or g.app_id not in owned_ids)
+        and _normalize_title_for_ownership(g.name) not in owned_titles
         and (_source_key_for_game(g) in requested_sources or not _source_key_for_game(g))
     ]
 
@@ -1276,6 +1270,44 @@ def _deal_to_dict(g) -> dict:
 # Tue/Fri ~10am PT). A 6-hour TTL is a reasonable compromise between freshness
 # and fetch frequency. Pass refresh=true to /api/deals to force a refetch.
 DEALS_CACHE_TTL = 6 * 3600  # seconds
+
+
+def _normalize_title_for_ownership(name: str) -> str:
+    """Normalize a game title for cross-store ownership matching.
+
+    Stores often carry the same game under slightly different titles (edition
+    suffixes, trailing marks, punctuation). Normalizing to lowercase and
+    stripping the most common edition suffixes catches cross-store duplicates
+    without pulling in a fuzzy-match dependency. Leaves uncaught cases to the
+    prompt-level "already owned" constraint as a second safety net.
+    """
+    n = (name or "").lower().strip()
+    # Strip trademark / registered symbols that sometimes appear on one store
+    # but not the other (Steam tends to drop them; GOG sometimes keeps them).
+    for sym in ("\u2122", "\u00ae", "\u00a9"):
+        n = n.replace(sym, "")
+    n = n.strip().rstrip(":-\u2013\u2014 ").strip()
+    # Strip the most common edition suffixes. Order matters: more specific
+    # phrases are removed before their short forms.
+    suffixes = (
+        " - game of the year edition", ": game of the year edition", " game of the year edition",
+        " - goty edition", ": goty edition", " goty edition", " goty",
+        " - definitive edition", ": definitive edition", " definitive edition",
+        " - enhanced edition", ": enhanced edition", " enhanced edition",
+        " - complete edition", ": complete edition", " complete edition",
+        " - deluxe edition", ": deluxe edition", " deluxe edition",
+        " - gold edition", ": gold edition", " gold edition",
+        " - ultimate edition", ": ultimate edition", " ultimate edition",
+        " - legendary edition", ": legendary edition", " legendary edition",
+        " - anniversary edition", ": anniversary edition", " anniversary edition",
+        " - remastered", ": remastered", " remastered",
+        " remaster",
+    )
+    for suffix in suffixes:
+        if n.endswith(suffix):
+            n = n[: -len(suffix)].strip()
+            break
+    return n
 
 
 def _source_key_for_game(g) -> str:
@@ -1850,19 +1882,12 @@ def _build_new_game_prompt(
         mins = g["playtime_minutes"]
         # Show minutes (not hours) for low-playtime games so "5 min" reads naturally
         playtime = f"{mins}min" if mins else "0 min"
-        deal = g.get("deal")
-        if deal:
-            tag  = "⭐ WISHLIST + ON SALE" if deal.get("wishlist") else "🔥 ON SALE"
-            line = f"{tag}: {g['name']} ({g['platform'].upper()}) | {deal['discount']}% OFF → {deal['sale']} (was {deal['original']}) | {playtime}"
-        else:
-            line = f"- {g['name']} ({g['platform'].upper()}) | {playtime}"
+        line = f"- {g['name']} ({g['platform'].upper()}) | {playtime}"
         if g.get("rawg_rating"):
             line += f" | RAWG {g['rawg_rating']:.1f}/5"
         if g.get("genres"):
             line += f" | {', '.join(g['genres'][:3])}"
         return line
-
-    has_deals = any(g.get("deal") for g in unplayed)
 
     # Only games with >60 minutes played are a meaningful taste signal
     played = [g for g in games if g["playtime_minutes"] > 60]
@@ -1887,12 +1912,6 @@ def _build_new_game_prompt(
             "the one they'd least expect to love but probably will."
         )
 
-    deal_note = (
-        " Games marked 🔥 ON SALE or ⭐ WISHLIST + ON SALE are currently discounted — "
-        "factor in the deal when ranking (a great match that's also on sale now is ideal)."
-        if has_deals else ""
-    )
-
     cached = (
         f"You are a gaming advisor helping a player explore their backlog.\n\n"
         f"**GAMES THEY'VE PLAYED (their taste profile):**\n{played_lines}"
@@ -1900,7 +1919,8 @@ def _build_new_game_prompt(
     rest = (
         f"{prefs_section}\n\n"
         f"**UNPLAYED GAMES IN THEIR LIBRARY:**\n{unplayed_lines}\n\n"
-        f"Recommend exactly {count} unplayed games they should try next, chosen specifically because they match the player's demonstrated taste.{deal_note}\n\n"
+        f"Recommend exactly {count} unplayed games they should try next, chosen specifically "
+        f"because they match the player's demonstrated taste.\n\n"
         f"{format_instructions}\n\nOnly recommend games from the unplayed list above."
     )
     return cached, rest
