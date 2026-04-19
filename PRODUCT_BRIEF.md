@@ -31,13 +31,10 @@ Nothing combines my whole library, what I've actually played, reviews, and curre
 
 ## Bets
 
-
 - Players think about *their games*, not *their Steam*. One unified table across stores.
 - Four named modes — play / buy / backlog / discover — instead of one "recommend" button. Each have different prompts and a different user flow.
 - Free-text mood beats dropdowns. Users write more useful context than they'd click.
 - No stored credentials. You re-log-in after a restart; nothing leaks.
-
-![Streaming recommendation mid-response](docs/screenshots/streaming.png)
 
 ## If I shipped this publicly, I'd cut
 
@@ -50,8 +47,6 @@ Nothing combines my whole library, what I've actually played, reviews, and curre
 - A mobile layout. The deals table is hostile on a phone.
 - Share a pick as an image. Cheap viral loop.
 
-![Current deals with historical-low verdicts](docs/screenshots/deals.png)
-
 ## Metrics I'd watch
 
 - **Acceptance rate** — how often do users click through on the pick.
@@ -60,4 +55,4 @@ Nothing combines my whole library, what I've actually played, reviews, and curre
 
 ---
 
-CRIT is what I use three nights a week. Engineering side in [CASE_STUDY.md](CASE_STUDY.md).
+CRIT is what I use three nights a week. Engineering side in [ENGINEERING_BRIEF.md](ENGINEERING_BRIEF.md).

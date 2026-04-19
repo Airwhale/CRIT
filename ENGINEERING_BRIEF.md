@@ -1,12 +1,10 @@
-# CRIT — Case Study
+# CRIT — Engineering Brief
 
 **A self-hosted, AI-powered game recommender that reasons about my actual play history across Steam, Epic, and GOG to provide informed game reccomendations.**
 
 ## The problem
 
 After a decade of Steam sales, Humble bundles, and Epic giveaways, I own hundreds of games across three stores and no good way to decide what to play next. Existing recommenders look at one storefront at a time, don't know what I've already finished, So I put together something that looks at my total library across three platforms, my steam playtime, and current deals, and reccomends me what I should play next from my current library or deep discount sales.
-
-![CRIT hero view — library + streaming recommendation](docs/screenshots/hero.png)
 
 ## What it does
 
@@ -78,7 +76,7 @@ sequenceDiagram
     Backend-->>Browser: SSE: done
 ```
 
-![Unified library across Steam, Epic, and GOG](docs/screenshots/library.png)
+![Streaming recommendation mid-response](docs/screenshots/streaming.png)
 
 ## Numbers
 
@@ -88,8 +86,6 @@ sequenceDiagram
 - 4 recommendation modes
 - 6-hour deals cache, 3 endpoints sharing it
 - 3 models selectable per request (Haiku 4.5 / Sonnet 4.6 / Opus 4.6)
-
-![Streaming recommendation mid-response](docs/screenshots/streaming.png)
 
 ## Trade-offs
 
