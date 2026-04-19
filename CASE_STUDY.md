@@ -1,10 +1,10 @@
 # CRIT — Case Study
 
-**A self-hosted, AI-powered game recommender that reasons about my actual play history across Steam, Epic, and GOG.**
+**A self-hosted, AI-powered game recommender that reasons about my actual play history across Steam, Epic, and GOG to provide informed game reccomendations.**
 
 ## The problem
 
-After a decade of Steam sales, Humble bundles, and Epic giveaways, I own hundreds of games across three stores and no good way to decide what to play next. Existing recommenders look at one storefront at a time, don't know what I've already finished, and can't tell me which store has the best price on the handful of games I'd actually enjoy.
+After a decade of Steam sales, Humble bundles, and Epic giveaways, I own hundreds of games across three stores and no good way to decide what to play next. Existing recommenders look at one storefront at a time, don't know what I've already finished, So I put together something that looks at my total library across three platforms, my steam playtime, and current deals, and reccomends me what I should play next from my current library or deep discount sales.
 
 <!-- HERO SCREENSHOT — main app view with library loaded and a recommendation mid-stream.
      Suggested filename: docs/screenshots/hero.png
