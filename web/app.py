@@ -32,6 +32,7 @@ from contextlib import asynccontextmanager
 
 import anthropic
 import httpx
+import openai  # Used as the OpenAI-compatible client when the user picks OpenRouter
 from fastapi import FastAPI, Request, Response, HTTPException, Cookie
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from dotenv import load_dotenv
@@ -942,6 +943,7 @@ async def recommend(
     # Model options
     model: str = "claude-sonnet-4-6",
     use_thinking: bool = False,
+    provider: str = "anthropic",   # "anthropic" (default, direct) | "openrouter"
     session_id: str | None = Cookie(default=None),
 ):
     """Stream game recommendations from Claude via Server-Sent Events.
@@ -964,9 +966,18 @@ async def recommend(
     _, session = _get_session(session_id)
 
     # Pre-stream validation — these checks return 400 before any SSE headers are sent
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not anthropic_key:
-        raise HTTPException(400, "ANTHROPIC_API_KEY not configured on the server")
+    if provider not in ("anthropic", "openrouter"):
+        raise HTTPException(400, f"Unknown provider: {provider}")
+    # Validate the right key for the chosen provider. Anthropic direct supports
+    # extended thinking and prompt caching; OpenRouter is plain chat completions.
+    if provider == "anthropic":
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise HTTPException(400, "ANTHROPIC_API_KEY not configured on the server")
+    else:  # provider == "openrouter"
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise HTTPException(400, "OPENROUTER_API_KEY not configured on the server")
     if not session:
         raise HTTPException(400, "No platforms connected")
     if mode not in ("library", "sales", "new", "discover"):
@@ -1109,35 +1120,61 @@ async def recommend(
         else:  # mode == "library"
             prompt = _build_library_prompt(games_raw, preferences, count)
 
-        # ── Step 3: Stream Claude's response ──────────────────────────────────
+        # ── Step 3: Stream the model's response ───────────────────────────────
         yield status("Asking Claude…")
 
-        # Use AsyncAnthropic so the streaming doesn't block the event loop
-        client = anthropic.AsyncAnthropic(api_key=anthropic_key)
         cached_text, rest_text = prompt
-        api_kwargs = {
-            "model": model,
-            "max_tokens": 4096,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": cached_text, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": rest_text},
-            ]}],
-        }
-        if use_thinking:
-            api_kwargs["thinking"] = {"type": "adaptive"}
+
         try:
             async with _sse_timeout(240):
-                async with client.messages.stream(**api_kwargs) as stream:
-                    # Yield each text chunk as it arrives — the browser renders it immediately
-                    async for text in stream.text_stream:
-                        # json.dumps handles quoting, escaping newlines, etc.
-                        yield f'data: {json.dumps({"text": text})}\n\n'
+                if provider == "anthropic":
+                    # Native Anthropic SDK: supports prompt caching on the long
+                    # taste-profile prefix and extended thinking when toggled.
+                    client = anthropic.AsyncAnthropic(api_key=api_key)
+                    api_kwargs = {
+                        "model": model,
+                        "max_tokens": 4096,
+                        "messages": [{"role": "user", "content": [
+                            {"type": "text", "text": cached_text, "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": rest_text},
+                        ]}],
+                    }
+                    if use_thinking:
+                        api_kwargs["thinking"] = {"type": "adaptive"}
+                    async with client.messages.stream(**api_kwargs) as stream:
+                        async for text in stream.text_stream:
+                            yield f'data: {json.dumps({"text": text})}\n\n'
+                else:
+                    # OpenRouter via the OpenAI-compatible chat completions API.
+                    # Note: prompt caching and extended thinking are NOT supported
+                    # on this path; the UI disables those controls when the user
+                    # picks OpenRouter, but we ignore them defensively here too.
+                    client = openai.AsyncOpenAI(
+                        api_key=api_key,
+                        base_url="https://openrouter.ai/api/v1",
+                    )
+                    # Concatenate the cached prefix and the rest into one user
+                    # message — OpenAI's content field is a plain string, with
+                    # no per-block cache_control concept.
+                    stream = await client.chat.completions.create(
+                        model=model,
+                        max_tokens=4096,
+                        messages=[{"role": "user", "content": cached_text + "\n\n" + rest_text}],
+                        stream=True,
+                    )
+                    async for chunk in stream:
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        text = getattr(delta, "content", None)
+                        if text:
+                            yield f'data: {json.dumps({"text": text})}\n\n'
 
             # Signal that the stream is complete so the frontend can hide the spinner
             yield 'data: {"done": true}\n\n'
 
         except TimeoutError:
-            yield f'data: {json.dumps({"error": "Claude response timed out after 4 minutes."})}\n\n'
+            yield f'data: {json.dumps({"error": "Model response timed out after 4 minutes."})}\n\n'
         except Exception as e:
             # Yield the error as an SSE event rather than crashing the stream
             yield f'data: {json.dumps({"error": str(e)})}\n\n'

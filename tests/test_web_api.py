@@ -29,7 +29,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
 from web.app import app, _sessions, _session_last_seen
-from tests.conftest import make_claude_client, FAKE_GAMES, parse_sse
+from tests.conftest import make_claude_client, make_openrouter_client, FAKE_GAMES, parse_sse
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -620,6 +620,157 @@ class TestRecommend:
         events = parse_sse(resp.text)
         # Should succeed (clamped, not rejected)
         assert any(e.get("done") is True for e in events)
+
+
+class TestRecommendOpenRouter:
+    """Tests for the OpenRouter provider path of GET /api/recommend.
+
+    OpenRouter is offered as an alternative to the direct Anthropic SDK. It
+    speaks the OpenAI-compatible chat-completions API, so the streaming shape
+    is different (`chunk.choices[0].delta.content`). Extended thinking and
+    Anthropic prompt caching are NOT available on this path; the UI disables
+    those controls when OpenRouter is selected and the server ignores them.
+    """
+
+    def _recommend_or(self, client, session_id, claude_chunks=None, mode="library",
+                      provider="openrouter", **params):
+        """Make a GET /api/recommend request through the OpenRouter mock.
+
+        Patches both `web.app._fetch_steam` (so the library fetch is
+        deterministic) and `web.app.openai.AsyncOpenAI` (so the streaming
+        chunks come from the fake instead of the real API).
+        """
+        chunks = claude_chunks or ["Top pick: ", "The Witcher 3 — start there."]
+
+        query = {"mode": mode, "provider": provider, **params}
+        query_str = "&".join(f"{k}={v}" for k, v in query.items())
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
+             patch("web.app.openai.AsyncOpenAI",
+                   return_value=make_openrouter_client(chunks)):
+            _set_session_cookie(client, session_id)
+            resp = client.get(f"/api/recommend?{query_str}")
+        return resp
+
+    # ── Success paths ──────────────────────────────────────────────────────
+
+    def test_openrouter_streams_text_and_done(self, client, monkeypatch):
+        """Provider=openrouter with key set returns a normal SSE text/done stream."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+        session_id = "sess-or-ok"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        resp = self._recommend_or(client, session_id)
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+
+        text_events = [e for e in events if "text" in e]
+        assert len(text_events) > 0
+        full_text = "".join(e["text"] for e in text_events)
+        assert "The Witcher 3" in full_text
+
+        assert any(e.get("done") is True for e in events)
+
+    def test_openrouter_ignores_use_thinking(self, client, monkeypatch):
+        """use_thinking=true must not break the OpenRouter path (it's just ignored).
+
+        The UI disables the thinking checkbox when OpenRouter is selected, but
+        the server should still accept the parameter and produce a normal
+        stream rather than 500ing.
+        """
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+        session_id = "sess-or-thinking"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        resp = self._recommend_or(client, session_id, use_thinking="true")
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        assert any(e.get("done") is True for e in events)
+
+    def test_openrouter_passes_model_through(self, client, monkeypatch):
+        """The model query param flows through to the OpenAI client unchanged."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+        session_id = "sess-or-model"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        captured_kwargs = {}
+
+        async def _capture_create(**kwargs):
+            captured_kwargs.update(kwargs)
+            from tests.conftest import _AsyncChunkIter
+            return _AsyncChunkIter(["ok"])
+
+        fake_client = MagicMock()
+        fake_client.chat.completions.create = _capture_create
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
+             patch("web.app.openai.AsyncOpenAI", return_value=fake_client):
+            _set_session_cookie(client, session_id)
+            resp = client.get(
+                "/api/recommend?provider=openrouter&model=openai/gpt-4o&mode=library"
+            )
+
+        assert resp.status_code == 200
+        assert captured_kwargs.get("model") == "openai/gpt-4o"
+        # Sanity-check the OpenAI message shape: a single user message with a
+        # plain string content (no Anthropic-style content blocks or cache_control).
+        msgs = captured_kwargs.get("messages")
+        assert isinstance(msgs, list) and len(msgs) == 1
+        assert msgs[0]["role"] == "user"
+        assert isinstance(msgs[0]["content"], str)
+        assert "stream" in captured_kwargs and captured_kwargs["stream"] is True
+
+    # ── Failure paths ──────────────────────────────────────────────────────
+
+    def test_missing_openrouter_key_returns_400(self, client, monkeypatch):
+        """Without OPENROUTER_API_KEY set, provider=openrouter returns 400 pre-stream."""
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        session_id = "sess-or-nokey"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        _set_session_cookie(client, session_id)
+        resp = client.get("/api/recommend?provider=openrouter&mode=library")
+
+        assert resp.status_code == 400
+        assert "OPENROUTER_API_KEY" in resp.text
+
+    def test_unknown_provider_returns_400(self, client, monkeypatch):
+        """An unrecognised provider value is rejected pre-stream."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        session_id = "sess-bad-provider"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        _set_session_cookie(client, session_id)
+        resp = client.get("/api/recommend?provider=foo&mode=library")
+
+        assert resp.status_code == 400
+        assert "provider" in resp.text.lower()
+
+    def test_anthropic_provider_path_unaffected(self, client, monkeypatch):
+        """Explicit provider=anthropic still uses the Anthropic SDK and works.
+
+        Regression check: the OpenRouter addition must not have broken the
+        original code path. The Anthropic-direct path streams via
+        client.messages.stream(), which the old fixture covers.
+        """
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        session_id = "sess-anth-explicit"
+        _sessions[session_id] = {"steam": {"api_key": "k", "user_id": "u"}}
+
+        with patch("web.app._fetch_steam", return_value=FAKE_GAMES), \
+             patch("web.app.anthropic.AsyncAnthropic",
+                   return_value=make_claude_client(["Hello ", "world"])):
+            _set_session_cookie(client, session_id)
+            resp = client.get("/api/recommend?provider=anthropic&mode=library")
+
+        assert resp.status_code == 200
+        events = parse_sse(resp.text)
+        full_text = "".join(e["text"] for e in events if "text" in e)
+        assert "Hello" in full_text
+        assert any(e.get("done") is True for e in events)
+
 
 class TestDealsEndpoint:
     """Tests for GET /api/deals standalone deals-table endpoint."""

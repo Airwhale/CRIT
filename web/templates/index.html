@@ -1041,15 +1041,57 @@
     </div>
 
     <div class="model-row">
+      <label>Provider:</label>
+      <select id="rec-provider" onchange="onProviderChange()">
+        <option value="anthropic" selected>Anthropic (direct)</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+
       <label>Model:</label>
-      <select id="rec-model" onchange="onModelChange()">
+      <select id="rec-model-anthropic" onchange="onModelChange()">
         <option value="claude-sonnet-4-6" selected>Sonnet 4.6 (default)</option>
         <option value="claude-haiku-4-5-20251001">Haiku 4.5 (fastest/cheapest)</option>
         <option value="claude-opus-4-6">Opus 4.6 (best quality)</option>
       </select>
+      <!-- Model IDs follow OpenRouter's namespaced format. Their catalog drifts
+           occasionally; verify against https://openrouter.ai/models if a
+           selection starts returning "model not found". -->
+      <select id="rec-model-openrouter" hidden>
+        <optgroup label="Anthropic">
+          <option value="anthropic/claude-sonnet-4.5" selected>Claude Sonnet 4.5 — balanced</option>
+          <option value="anthropic/claude-haiku-4.5">Claude Haiku 4.5 — fast, cheap</option>
+          <option value="anthropic/claude-opus-4.1">Claude Opus 4.1 — best quality</option>
+        </optgroup>
+        <optgroup label="OpenAI">
+          <option value="openai/gpt-4o">GPT-4o — strong general</option>
+          <option value="openai/gpt-4o-mini">GPT-4o mini — cheapest OpenAI</option>
+          <option value="openai/o1-mini">o1-mini — reasoning, mid cost</option>
+        </optgroup>
+        <optgroup label="Google">
+          <option value="google/gemini-2.5-pro">Gemini 2.5 Pro — Google flagship</option>
+          <option value="google/gemini-2.5-flash">Gemini 2.5 Flash — very fast, very cheap</option>
+        </optgroup>
+        <optgroup label="Meta (open weights)">
+          <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B Instruct</option>
+          <option value="meta-llama/llama-3.1-405b-instruct">Llama 3.1 405B Instruct — biggest open</option>
+        </optgroup>
+        <optgroup label="DeepSeek">
+          <option value="deepseek/deepseek-chat">DeepSeek V3 — strong, very cheap</option>
+          <option value="deepseek/deepseek-r1">DeepSeek R1 — reasoning specialist</option>
+        </optgroup>
+        <optgroup label="Other">
+          <option value="mistralai/mistral-large-2411">Mistral Large — European option</option>
+          <option value="x-ai/grok-2-1212">Grok 2 — xAI</option>
+          <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B — Alibaba</option>
+        </optgroup>
+      </select>
+
       <label class="thinking-toggle" id="thinking-label">
         <input type="checkbox" id="rec-thinking"> Deep thinking <small style="color:var(--muted)">(slower)</small>
       </label>
+    </div>
+    <div id="provider-note" hidden style="font-size:0.72rem;color:var(--muted);margin-top:0.3rem;">
+      OpenRouter mode: extended thinking and prompt caching are not supported on this path.
     </div>
 
     <div id="rec-output">
@@ -1824,9 +1866,48 @@ function _parseCSV(text) {
   });
 }
 
-// ── Model toggle ──────────────────────────────────────────────────────────────
+// ── Provider + model toggles ──────────────────────────────────────────────────
+function _activeProvider() {
+  return document.getElementById('rec-provider')?.value || 'anthropic';
+}
+
+function _activeModelEl() {
+  return document.getElementById(
+    _activeProvider() === 'openrouter' ? 'rec-model-openrouter' : 'rec-model-anthropic'
+  );
+}
+
+function onProviderChange() {
+  const provider     = _activeProvider();
+  const anthrModel   = document.getElementById('rec-model-anthropic');
+  const orModel      = document.getElementById('rec-model-openrouter');
+  const note         = document.getElementById('provider-note');
+  const thinkingLab  = document.getElementById('thinking-label');
+  const thinkingCb   = document.getElementById('rec-thinking');
+
+  if (provider === 'openrouter') {
+    anthrModel.hidden = true;
+    orModel.hidden    = false;
+    note.hidden       = false;
+    // Extended thinking and prompt caching are Anthropic-direct only.
+    thinkingCb.checked  = false;
+    thinkingCb.disabled = true;
+    thinkingLab.style.opacity = '0.4';
+  } else {
+    anthrModel.hidden = false;
+    orModel.hidden    = true;
+    note.hidden       = true;
+    // Re-enable per the model rules below.
+    thinkingCb.disabled = false;
+    thinkingLab.style.opacity = '1';
+    onModelChange();
+  }
+}
+
 function onModelChange() {
-  const model = document.getElementById('rec-model').value;
+  // Only meaningful in Anthropic mode; OpenRouter ignores the thinking toggle.
+  if (_activeProvider() !== 'anthropic') return;
+  const model = document.getElementById('rec-model-anthropic').value;
   const thinkingLabel = document.getElementById('thinking-label');
   const thinkingCb = document.getElementById('rec-thinking');
   // Haiku doesn't support extended thinking
@@ -2149,7 +2230,8 @@ function getRecommendations() {
   const minDiscount = parseInt(document.getElementById('min-discount').value) || 40;
   const dealSources = _selectedDealSources();
   const maxNewMin   = parseInt(document.getElementById('max-new-minutes').value) || 60;
-  const model       = document.getElementById('rec-model')?.value || 'claude-sonnet-4-6';
+  const provider    = _activeProvider();
+  const model       = _activeModelEl()?.value || 'claude-sonnet-4-6';
   const useThinking = document.getElementById('rec-thinking')?.checked || false;
 
   const output     = document.getElementById('rec-output');
@@ -2190,6 +2272,7 @@ function getRecommendations() {
     max_new_minutes:  maxNewMin,
     model,
     use_thinking:     useThinking,
+    provider,
   });
 
   let rawText = '';

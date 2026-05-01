@@ -1,4 +1,5 @@
 anthropic>=0.40.0
+openai>=1.50.0          # OpenRouter via OpenAI-compatible chat completions
 requests>=2.31.0
 httpx>=0.27.0
 python-dotenv>=1.0.0

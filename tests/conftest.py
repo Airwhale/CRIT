@@ -87,6 +87,56 @@ def make_claude_client(chunks: list[str] | None = None):
     return client
 
 
+# ── Fake OpenRouter (OpenAI-compatible) async streaming ──────────────────────
+# When the user picks the OpenRouter provider, the web app uses:
+#     client = openai.AsyncOpenAI(...)
+#     stream = await client.chat.completions.create(stream=True, ...)
+#     async for chunk in stream:
+#         text = chunk.choices[0].delta.content
+#
+# We mock the awaitable `.create()` and the async-iterable stream of chunks
+# whose `.choices[0].delta.content` carries the text deltas.
+
+class _AsyncChunkIter:
+    """Async iterator yielding OpenAI-shaped chat completion chunk objects."""
+    def __init__(self, chunks: list[str]):
+        self._chunks = iter(chunks)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            text = next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration
+        # Construct the minimum chunk shape the app reads: chunk.choices[0].delta.content
+        delta  = type("Delta",  (), {"content": text})()
+        choice = type("Choice", (), {"delta":   delta})()
+        return  type("Chunk",   (), {"choices": [choice]})()
+
+
+def make_openrouter_client(chunks: list[str] | None = None):
+    """Create a fake openai.AsyncOpenAI client whose stream yields the given chunks.
+
+    Used to monkeypatch `web.app.openai.AsyncOpenAI` in the OpenRouter-path SSE
+    tests so they can stream predictable text without hitting the real API.
+
+    `client.chat.completions.create` is implemented as an async function, which
+    makes `await client.chat.completions.create(...)` resolve to an _AsyncChunkIter
+    that the app code then iterates over with `async for chunk in stream:`.
+    """
+    if chunks is None:
+        chunks = ["Here are my ", "top picks for you."]
+
+    async def _create(**_kwargs):
+        return _AsyncChunkIter(chunks)
+
+    client = MagicMock()
+    client.chat.completions.create = _create
+    return client
+
+
 # ── Fake game library data ─────────────────────────────────────────────────────
 # Three games with varied playtime and ratings, covering all the game dict fields
 # that the web API returns. Used as the default library in most web API tests.
