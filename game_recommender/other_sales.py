@@ -69,15 +69,22 @@ def get_gog_catalog_deals(min_discount: int = 40, page_size: int = 48) -> list[S
         products = resp.json().get("products", [])
         for product in products:
             price = product.get("price") or {}
-            if not price.get("isDiscounted"):
-                continue
-            discount = int(price.get("discountPercentage", 0))
+            # GOG API returns discount as a string like "-95%", extract the number
+            discount_str = price.get("discount", "0%").strip().lstrip("-").rstrip("%")
+            try:
+                discount = int(discount_str) if discount_str else 0
+            except ValueError:
+                discount = 0
             if discount < min_discount:
                 continue
-            # baseAmount / finalAmount are decimal strings, e.g. "29.99"
+            # baseMoney.amount and finalMoney.amount are decimal strings, e.g. "29.99"
             try:
-                base_cents  = round(float(price.get("baseAmount",  0)) * 100)
-                final_cents = round(float(price.get("finalAmount", 0)) * 100)
+                base_money = price.get("baseMoney") or {}
+                final_money = price.get("finalMoney") or {}
+                base_cents  = round(float(base_money.get("amount", 0)) * 100)
+                final_cents = round(float(final_money.get("amount", 0)) * 100)
+                if base_cents == 0:
+                    continue
             except (TypeError, ValueError):
                 continue
             slug = product.get("slug", "")
