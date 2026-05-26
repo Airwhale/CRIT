@@ -9,6 +9,7 @@ Sources:
 """
 
 import requests
+import time
 from game_recommender.steam_sales import SaleGame
 
 
@@ -22,6 +23,7 @@ _CS_STORE_NAMES: dict[str, str] = {
 
 _GOG_CATALOG_URL = "https://catalog.gog.com/v1/catalog"
 _GOG_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; game-recommender/1.0)"}
+_CS_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; game-recommender/1.0)"}
 
 
 def get_gog_catalog_deals(min_discount: int = 40, page_size: int = 48) -> list[SaleGame]:
@@ -142,13 +144,21 @@ def get_cheapshark_deals(
                         "onSale":     1,
                         "lowerPrice": 0,
                     },
+                    headers=_CS_HEADERS,
                     timeout=10,
                 )
+                # CheapShark returns 429 on rate limit; stop processing this store
+                if resp.status_code == 429:
+                    break
                 resp.raise_for_status()
             except Exception:
                 break  # Skip remaining pages for this store if the request fails
 
             deals = resp.json()
+            if not isinstance(deals, list):
+                # API returned an error dict (e.g., rate limit message), skip this store
+                break
+
             for deal in deals:
                 savings = float(deal.get("savings", 0))
                 if savings < min_discount:
@@ -170,6 +180,8 @@ def get_cheapshark_deals(
             if len(deals) < page_size:
                 break
             page += 1
+            # Space out requests to avoid rate limiting
+            time.sleep(0.5)
 
     return sorted(games, key=lambda g: g.discount_percent, reverse=True)
 
